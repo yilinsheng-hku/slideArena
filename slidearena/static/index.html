@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlideArena · 测一测你的模型谁最会做 PPT</title>
+<style>
+  :root { --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#f8fafc; --card:#fff; --accent:#2563eb; --good:#16a34a; --bad:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:20px 32px; background:#0f172a; color:#fff; display:flex; align-items:baseline; gap:16px; }
+  header h1 { margin:0; font-size:22px; }
+  header span { color:#94a3b8; font-size:14px; }
+  nav { display:flex; gap:4px; padding:0 32px; background:#fff; border-bottom:1px solid var(--line); }
+  nav button { border:0; background:none; padding:14px 18px; font-size:15px; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; }
+  nav button.on { color:var(--accent); border-color:var(--accent); font-weight:600; }
+  main { max-width:1100px; margin:24px auto; padding:0 24px; }
+  section { display:none; } section.on { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; margin-bottom:18px; }
+  .card h2 { margin:0 0 12px; font-size:17px; }
+  .hint { color:var(--muted); font-size:13px; margin:4px 0 12px; }
+  .grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:12px 16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input, select, textarea { width:100%; padding:9px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; font-family:inherit; }
+  textarea { min-height:90px; resize:vertical; }
+  .btn { display:inline-block; border:1px solid #d1d5db; background:#fff; padding:8px 14px; border-radius:6px; cursor:pointer; font-size:14px; text-decoration:none; color:var(--ink); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; background:#eef2ff; color:#3730a3; }
+  .ok { color:var(--good); } .err { color:var(--bad); }
+  .log { background:#0f172a; color:#cbd5e1; font-family: Consolas, monospace; font-size:12px; padding:12px; border-radius:8px; max-height:220px; overflow:auto; white-space:pre-wrap; }
+  .bar { height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; min-width:80px; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .score { display:flex; align-items:center; gap:8px; }
+  .score b { width:34px; text-align:right; font-variant-numeric: tabular-nums; }
+  .crown { color:#ca8a04; font-weight:600; }
+  details { margin-top:8px; } summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  .empty { color:var(--muted); padding:20px 0; text-align:center; }
+  .plan li { margin:4px 0; }
+</style>
+</head>
+<body>
+<header><h1>SlideArena</h1><span>用你已有的 API，测出谁最会做 PPT，再让它们分工合作</span></header>
+<nav>
+  <button data-tab="models" class="on">① 接入模型</button>
+  <button data-tab="bench">② 能力测试</button>
+  <button data-tab="deck">③ 分工做 PPT</button>
+</nav>
+<main>
+
+<section id="models" class="on">
+  <div class="card">
+    <h2>添加模型</h2>
+    <p class="hint">选一个服务商，填上 API Key 和模型名称即可。Key 只保存在本机（~/.slidearena/models.json）；也可以写成 <code>env:变量名</code>，从环境变量读取。</p>
+    <div class="grid">
+      <div><label>服务商</label><select id="preset"></select></div>
+      <div><label>显示名称</label><input id="m-name" placeholder="例如：DeepSeek V3"></div>
+      <div><label>接口地址 base_url</label><input id="m-base"></div>
+      <div><label>模型名称 model</label><input id="m-model" placeholder="例如：deepseek-chat"></div>
+      <div><label>API Key</label><input id="m-key" type="password" placeholder="sk-... 或 env:DEEPSEEK_API_KEY"></div>
+      <div><label>协议</label><select id="m-proto"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option><option value="mock">演示（离线）</option></select></div>
+      <div class="row" style="grid-column:1/3">
+        <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--ink)"><input type="checkbox" id="m-img" style="width:auto"> 这个接口能生成图片（/images/generations）</label>
+        <input id="m-imgmodel" placeholder="图片模型名称（可选，例如 gpt-image-1）" style="max-width:320px">
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="add">保存模型</button>
+      <button class="btn" id="demo">没有 Key？先加 3 个演示模型</button>
+      <span id="add-msg" class="hint" style="margin:0"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>已接入的模型</h2>
+    <table><thead><tr><th>名称</th><th>服务</th><th>模型</th><th>Key</th><th>连通性</th><th></th></tr></thead><tbody id="model-list"></tbody></table>
+  </div>
+</section>
+
+<section id="bench">
+  <div class="card">
+    <h2>一键能力测试</h2>
+    <p class="hint">题库共 23 道题：写大纲 ×4、压缩成一页 ×3、从资料做图表 ×9、排版 ×6，并包含配图生成测试。
+      全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。接入 3 个以上模型时，大纲还会由第三方模型<b>两两对比</b>评审（每组正反各问一次，抵消位置偏差），<b>不会自己评自己</b>。</p>
+    <div id="bench-pick" class="row" style="margin-bottom:12px"></div>
+    <div class="row" style="margin:0 0 12px">
+      <span class="hint" style="margin:0">测试维度</span>
+      <label class="row" style="margin:0"><input type="checkbox" class="dim-pick" value="text" checked style="width:auto">文字 / 大纲</label>
+      <label class="row" style="margin:0"><input type="checkbox" class="dim-pick" value="layout" checked style="width:auto">排版</label>
+      <label class="row" style="margin:0"><input type="checkbox" class="dim-pick" value="chart" checked style="width:auto">数据图表</label>
+      <label class="row" style="margin:0"><input type="checkbox" class="dim-pick" value="image" checked style="width:auto">配图</label>
+      <label class="row" style="margin:0"><input type="checkbox" id="visual-review" checked style="width:auto">排版视觉评审</label>
+    </div>
+    <div class="row"><button class="btn primary" id="run-bench">开始测试</button>
+      <label style="margin:0">每题重复</label><select id="repeats" style="width:80px"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
+      <span class="hint" style="margin:0">每个模型约 14 次调用；重复次数越多，排名越稳</span></div>
+    <div id="bench-log" class="log" style="display:none;margin-top:12px"></div>
+  </div>
+  <div class="card">
+    <h2>排行榜</h2>
+    <div id="board"><div class="empty">还没有测试结果</div></div>
+  </div>
+</section>
+
+<section id="deck">
+  <div class="card">
+    <h2>按测试结果分工做 PPT</h2>
+    <p class="hint">大纲交给"文字"最强的模型，图表页交给"数据图表"最强的模型，封面图交给"配图"最强的模型；最后在本地用统一主题生成可编辑的 .pptx。</p>
+    <label>你的需求（可以贴上资料和数字）</label>
+    <textarea id="brief">给管理层做一份 2026 年第三季度经营复盘：营收 Q1 12.5 亿、Q2 14.8 亿、Q3 17.2 亿；讲清楚增长原因、成本问题和下季度计划。</textarea>
+    <div class="row" style="margin-top:10px">
+      <label style="margin:0">页数</label><input id="n" type="number" value="6" min="3" max="20" style="width:80px">
+      <button class="btn primary" id="make">开始制作</button>
+    </div>
+    <div id="assign" class="plan"></div>
+    <div id="deck-log" class="log" style="display:none;margin-top:12px"></div>
+    <div id="deck-result" style="margin-top:12px"></div>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (url, body) => {
+  const r = await fetch(url, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  return r.json();
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'bench') { renderPick(); loadBoard(); }
+  if (b.dataset.tab === 'deck') showAssign();
+});
+
+// ---------- models
+let PRESETS = [], MODELS = [];
+async function init() {
+  PRESETS = await api('/api/presets');
+  $('#preset').innerHTML = PRESETS.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('');
+  $('#preset').onchange = applyPreset; applyPreset();
+  await loadModels();
+}
+function applyPreset() {
+  const p = PRESETS[$('#preset').value];
+  $('#m-base').value = p.base_url; $('#m-model').value = p.model; $('#m-proto').value = p.protocol;
+  $('#m-name').value = p.key === 'custom' ? '' : p.label.replace(/（.*?）|\(.*?\)/g, '').trim() + (p.model ? ' · ' + p.model : '');
+}
+async function loadModels() {
+  MODELS = await api('/api/models');
+  $('#model-list').innerHTML = MODELS.length ? MODELS.map(m => `
+    <tr><td><b>${esc(m.name)}</b> ${m.can_image ? '<span class="tag">可出图</span>' : ''}</td>
+      <td>${esc(m.protocol === 'mock' ? '演示' : (m.base_url || '').replace(/^https?:\/\//, '').split('/')[0])}</td>
+      <td>${esc(m.model)}</td><td>${esc(m.api_key_masked || '—')}</td>
+      <td id="ping-${m.id}"><span class="hint">未测试</span></td>
+      <td class="row"><button class="btn" onclick="ping('${m.id}')">测试连接</button><button class="btn" onclick="del('${m.id}')">删除</button></td></tr>`).join('')
+    : '<tr><td colspan="6" class="empty">还没有模型。填写上面的表单，或先添加演示模型。</td></tr>';
+}
+$('#add').onclick = async () => {
+  const body = {name: $('#m-name').value.trim(), base_url: $('#m-base').value.trim(), model: $('#m-model').value.trim(),
+    api_key: $('#m-key').value.trim(), protocol: $('#m-proto').value, can_image: $('#m-img').checked,
+    image_model: $('#m-imgmodel').value.trim()};
+  if (!body.name) body.name = body.model || '未命名模型';
+  const r = await api('/api/models', body);
+  if (r.error) { $('#add-msg').innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+  $('#add-msg').innerHTML = `<span class="ok">已保存，正在测试连接…</span>`;
+  $('#m-key').value = '';
+  await loadModels(); await ping(r.id);
+  $('#add-msg').textContent = '';
+};
+$('#demo').onclick = async () => { const r = await api('/api/demo', {}); $('#add-msg').textContent = `已添加 ${r.added} 个演示模型`; loadModels(); };
+async function ping(id) {
+  const cell = $('#ping-' + id); if (cell) cell.innerHTML = '<span class="hint">测试中…</span>';
+  const r = await api('/api/models/test', {id});
+  if (cell) cell.innerHTML = r.ok ? `<span class="ok">✓ ${r.latency}s</span>` : `<span class="err" title="${esc(r.error)}">✗ ${esc((r.error||'').slice(0, 40))}</span>`;
+}
+async function del(id) { if (confirm('删除这个模型？')) { await api('/api/models/delete', {id}); loadModels(); } }
+
+// ---------- benchmark
+function renderPick() {
+  $('#bench-pick').innerHTML = MODELS.length ? MODELS.map(m =>
+    `<label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--ink);border:1px solid var(--line);padding:6px 10px;border-radius:6px">
+       <input type="checkbox" class="pick" value="${m.id}" checked style="width:auto"> ${esc(m.name)}</label>`).join('')
+    : '<span class="hint">请先在 ① 接入模型</span>';
+}
+async function poll(job, logEl, onDone) {
+  logEl.style.display = 'block';
+  const t = setInterval(async () => {
+    const j = await api('/api/jobs/' + job);
+    logEl.textContent = (j.log || []).join('\n'); logEl.scrollTop = logEl.scrollHeight;
+    if (j.status !== 'running') { clearInterval(t); onDone(j); }
+  }, 600);
+}
+$('#run-bench').onclick = async () => {
+  const ids = [...document.querySelectorAll('.pick:checked')].map(x => x.value);
+  if (!ids.length) return alert('至少选一个模型');
+  const dims = [...document.querySelectorAll('.dim-pick:checked')].map(x => x.value);
+  if (!dims.length) return alert('至少选一个测试维度');
+  $('#run-bench').disabled = true;
+  const r = await api('/api/benchmark', {model_ids: ids, repeats: +$('#repeats').value,
+    dims, visual: $('#visual-review').checked});
+  poll(r.job, $('#bench-log'), j => { $('#run-bench').disabled = false; if (j.result) drawBoard(j.result); });
+};
+async function loadBoard() { const b = await api('/api/benchmarks/latest'); if (b) drawBoard(b); }
+const DIMS = [['text','文字 / 大纲'],['layout','排版'],['chart','数据图表'],['image','配图'],['speed','速度']];
+function drawBoard(b) {
+  if (!b.version) { $('#board').innerHTML = '<div class="empty">这是旧版测试结果，请重新运行一次测试</div>'; return; }
+  const name = id => (b.models.find(m => m.id === id) || {}).name || id;
+  const rows = b.models.map(m => ({m, s: b.scores[m.id] || {dims: {}}}));
+  rows.forEach(r => { const v = ['text','layout','chart'].map(d => (r.s.dims[d] || {}).score || 0); r.total = v.reduce((a, c) => a + c, 0) / v.length; });
+  rows.sort((a, c) => c.total - a.total);
+  const cell = (r, d) => {
+    const x = r.s.dims[d]; if (!x) return '<td class="hint">—</td>';
+    const tag = x.rank === 'leader' ? '<span class="crown" title="该项第一">👑</span>' : x.rank === 'tied' ? '<span class="tag" title="与第一的差距在统计误差内">并列</span>' : '';
+    const ci = x.lo != null && x.lo !== x.hi ? `<div class="hint" style="margin:2px 0 0;font-size:11px">区间 ${Math.round(x.lo)}–${Math.round(x.hi)}</div>` : '';
+    return `<td><div class="score"><b class="${x.rank === 'leader' ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}</td>`;
+  };
+  const parts = p => Object.entries(p || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+  const pw = (b.pairwise && b.pairwise.log) || [];
+  const pairCounts = (b.pairwise && b.pairwise.by_dim) || {};
+  const outlinePw = pw.filter(p => p.kind !== 'layout');
+  const layoutPw = pw.filter(p => p.kind === 'layout');
+  const pairTable = logs => `<table><thead><tr><th>题目</th><th>对比</th><th>评审</th><th>两次判决</th><th>结果</th></tr></thead><tbody>
+    ${logs.map(p => `<tr><td>${esc(p.case)}</td><td>${esc(name(p.a))} vs ${esc(name(p.b))}</td><td>${esc(name(p.judge))}</td>
+      <td>${esc((p.votes || []).join(' / '))}</td><td>${p.result === 'tie' ? '平局' : esc(p.result === '评审失败' ? '评审失败' : name(p.result))}</td></tr>`).join('')}
+    </tbody></table>`;
+  $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
+      👑 该项第一 · <span class="tag">并列</span> 与第一的差距在统计误差内 · 区间为 90% 置信区间</p>
+    <table><thead><tr><th>模型</th>${DIMS.map(d => `<th>${d[1]}</th>`).join('')}<th>中位耗时</th><th>token/次</th><th>失败</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><b>${esc(r.m.name)}</b></td>${DIMS.map(([d]) => cell(r, d)).join('')}
+      <td>${r.s.median_latency ?? '—'}s</td><td>${r.s.tokens_per_call ?? '—'}</td><td class="${r.s.errors ? 'err' : ''}">${r.s.errors || 0}${r.s.skipped ? `<br><small>限流未计分 ${r.s.skipped} 题</small>` : ''}</td></tr>`).join('')}
+    </tbody></table>
+    <details><summary>查看每道题的得分、分项和扣分原因</summary>
+    <table><thead><tr><th>模型</th><th>题目</th><th>得分</th><th>分项</th><th>说明</th></tr></thead><tbody>
+    ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${x.rep ? ` #${x.rep + 1}` : ''}</td>
+      <td class="${x.error ? 'err' : ''}">${x.skipped ? '限流未计分' : x.error ? '失败' : Math.round(x.score)}</td>
+      <td class="hint" style="font-size:12px">${esc(parts(x.parts))}</td>
+      <td>${x.dimension === 'image' && x.answer ? `<img src="${x.answer}" style="height:60px;border-radius:4px">` : ''} ${esc((x.notes || []).join('；') || '全部达标')}</td></tr>`).join('')}
+    </tbody></table></details>
+    ${outlinePw.length ? `<details><summary>查看大纲两两评审（${pairCounts.text ?? outlinePw.length} 组，每组正反各问一次）</summary>${pairTable(outlinePw)}</details>` : ''}
+    ${layoutPw.length ? `<details><summary>查看排版视觉评审（${pairCounts.layout ?? layoutPw.length} 组，每组正反各问一次）</summary>${pairTable(layoutPw)}</details>` : ''}`;
+}
+
+// ---------- deck
+async function showAssign() {
+  const r = await api('/api/route');
+  const items = [['text','大纲和文字'],['chart','数据图表页'],['image','封面配图']].map(([d, label]) => `<li>${label} → ${esc(r[d])}</li>`);
+  $('#assign').innerHTML = MODELS.length ? `<p class="hint" style="margin-top:14px">本次分工预览（在得分并列的模型里优先选更省、更快的）：</p><ul>${items.join('')}</ul>` : '<p class="err">请先接入模型</p>';
+}
+$('#make').onclick = async () => {
+  $('#make').disabled = true; $('#deck-result').innerHTML = '';
+  const r = await api('/api/deck', {brief: $('#brief').value, n_slides: +$('#n').value});
+  if (r.error) { $('#make').disabled = false; return alert(r.error); }
+  poll(r.job, $('#deck-log'), j => {
+    $('#make').disabled = false;
+    $('#deck-result').innerHTML = j.result ? `<a class="btn primary" href="${j.result.download}">下载 PPT（${j.result.slides} 页）</a>
+      <span class="hint">数字核查：${j.result.fact_check.checked} 个数字，改写 ${j.result.fact_check.fixed.length} 页，删减 ${j.result.fact_check.removed.length} 页；每页底部标注了由哪个模型制作</span>`
+      : `<span class="err">${esc(j.error)}</span>`;
+  });
+};
+init();
+</script>
+</body>
+</html>

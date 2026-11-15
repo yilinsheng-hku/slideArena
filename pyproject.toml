@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slidearena"
+version = "0.1.0"
+description = "Benchmark the AI models you already have on PPT tasks, then let each do what it is best at."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "SlideArena contributors" }]
+keywords = ["ppt", "llm", "benchmark", "presentation", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = ["python-pptx>=0.6.21", "Pillow"]
+
+[project.urls]
+Homepage = "https://github.com/OWNER/slidearena"
+Issues = "https://github.com/OWNER/slidearena/issues"
+
+[project.optional-dependencies]
+dev = ["ruff", "playwright>=1.40", "PyMuPDF>=1.23"]
+
+[project.scripts]
+slidearena = "slidearena.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["slidearena", "slidearena.static"]
+
+[tool.setuptools.package-data]
+slidearena = ["static/*"]
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
