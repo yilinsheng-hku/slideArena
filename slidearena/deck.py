@@ -19,6 +19,8 @@ from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR
 from pptx.util import Inches, Pt
 
 from . import benchmark, config, facts, llm
@@ -38,17 +40,57 @@ DECK_CHART_PROMPT = """[task:chart]
 页面标题：{title}
 页面要点：{bullets}
 
-严格要求：图表里的每一个数字都必须来自用户资料，或由资料中的数字直接计算得到（如增长率、占比），禁止编造或估算。
+严格要求：图表里的每一个数字都必须来自用户资料，或由资料中的数字直接计算得到（如增长率、占比），禁止编造或估算。请尽量提供 unit 字段；没有明确单位时可以省略。
 如果用户资料里没有足够的数字支撑这一页的图表，只输出 {{"skip": true}}。
 chart_type 从 bar / column / line / pie / doughnut 中选。takeaway 是一句不超过 30 字的结论。
 输出格式：{{"chart_type": "column", "title": "...", "unit": "...", "categories": ["..."], "series": [{{"name": "...", "values": [1.0]}}], "takeaway": "..."}}"""
 
 FIX_PROMPT = """[task:fix]
 下面这页 PPT 的要点里有资料中找不到依据的数字：{bad}
-请改写这些要点：删掉或替换为资料中有的数字，其他内容尽量保持不变，条数不变，每条不超过 28 个字。
+请改写这些要点：删掉或替换为资料中有的数字，其他内容尽量保持不变，条数不变，每条不超过 28 个字。每条要点都必须是一句完整、通顺的话。
 用户资料：{brief}
 原要点：{bullets}
 只输出 JSON：{{"bullets": ["..."]}}"""
+
+_NUMBER_TEXT = re.compile(r"(?<![A-Za-z0-9.])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*(亿元|亿|千万|百万元|万元|万|元|%|％|个百分点)?")
+_FORBIDDEN_CALCULATION = re.compile(r"[×÷=]|口径")
+
+
+def _source_decimal_limit(src: facts.Source) -> int:
+    quantities = src.qtys
+    return max((q.decimals for q in quantities), default=0)
+
+
+def _precision_issues(text: str, src: facts.Source) -> list[str]:
+    """Find derived-looking values written two or more decimals beyond the source."""
+    limit = _source_decimal_limit(src)
+    raw = src.qtys
+    issues = []
+    for q in facts.facts(text):
+        if q.decimals <= limit + 1:
+            continue
+        direct = any(q.family == s.family and abs(q.norm - s.norm) <= max(q.tol, s.tol)
+                     for s in raw)
+        if not direct:
+            issues.append(q.text)
+    return issues
+
+
+def _round_precision(text: str, src: facts.Source) -> str:
+    limit = _source_decimal_limit(src)
+
+    def repl(match):
+        frac = match.group(2) or ""
+        if len(frac) - 1 <= limit + 1:
+            return match.group(0)
+        value = round(float(match.group(1).replace(",", "") + frac), limit)
+        if limit:
+            number = f"{value:.{limit}f}"
+        else:
+            number = str(int(round(value)))
+        return number + (match.group(3) or "")
+
+    return _NUMBER_TEXT.sub(repl, str(text))
 
 
 def unsupported_values(chart: dict, brief: str) -> list[float]:
@@ -63,26 +105,41 @@ def verify_outline(slides: list[dict], brief: str, fixer: dict | None, progress)
     src = facts.Source(brief)
     report = {"checked": 0, "fixed": [], "removed": []}
     for s in slides:
-        bullets = [str(b) for b in s.get("bullets") or []]
+        original = [str(b) for b in s.get("bullets") or []]
+        blocked = [b for b in original if _FORBIDDEN_CALCULATION.search(b)]
+        bullets = [b for b in original if not _FORBIDDEN_CALCULATION.search(b)]
+        if blocked:
+            s["bullets"] = bullets
+            report["removed"].append({"slide": s.get("title"), "numbers": [], "bullets": blocked})
+            progress(f"核查：「{s.get('title')}」含算式或口径说明，已删去相关要点")
         report["checked"] += sum(len(facts.facts(b)) for b in bullets) + len(facts.facts(str(s.get("title", ""))))
         bad = [x for b in bullets for x in src.unsupported(b)]
-        if not bad:
+        precision = [x for b in bullets for x in _precision_issues(b, src)]
+        if not bad and not precision:
             continue
         if fixer:
             try:
-                r = llm.chat(fixer, FIX_PROMPT.format(bad="、".join(bad), brief=brief, bullets=json.dumps(bullets, ensure_ascii=False)),
+                problem = bad + [f"{x}（小数位过多）" for x in precision]
+                r = llm.chat(fixer, FIX_PROMPT.format(bad="、".join(problem), brief=brief, bullets=json.dumps(bullets, ensure_ascii=False)),
                              system=benchmark.SYS, max_tokens=1500, temperature=0)
                 new = [str(b) for b in (llm.extract_json(r.text).get("bullets") or [])]
-                if new and not any(src.unsupported(b) for b in new):
+                if new and not any(src.unsupported(b) or _precision_issues(b, src) or _FORBIDDEN_CALCULATION.search(b)
+                                   for b in new):
                     s["bullets"] = new
-                    report["fixed"].append({"slide": s.get("title"), "numbers": bad})
-                    progress(f"核查：「{s.get('title')}」里 {bad} 资料中没有依据，已改写")
+                    report["fixed"].append({"slide": s.get("title"), "numbers": problem})
+                    progress(f"核查：「{s.get('title')}」里 {problem} 需要修正，已改写")
                     continue
             except Exception:
                 pass
-        kept = [b for b in bullets if not src.unsupported(b)]
+        rounded = [_round_precision(b, src) for b in bullets]
+        if not any(src.unsupported(b) for b in rounded) and not any(_FORBIDDEN_CALCULATION.search(b) for b in rounded):
+            s["bullets"] = rounded
+            report["fixed"].append({"slide": s.get("title"), "numbers": bad + precision})
+            progress(f"核查：「{s.get('title')}」里的数字已按资料精度四舍五入")
+            continue
+        kept = [b for b in rounded if not src.unsupported(b) and not _FORBIDDEN_CALCULATION.search(b)]
         s["bullets"] = kept or [re.sub(r"\d+(?:\.\d+)?\s*(?:亿元|亿|万元|万|元|%|个百分点)?", "", bullets[0])]
-        report["removed"].append({"slide": s.get("title"), "numbers": bad})
+        report["removed"].append({"slide": s.get("title"), "numbers": bad + precision})
         progress(f"核查：「{s.get('title')}」里 {bad} 无法修正，已删去相关要点")
     return report
 
@@ -110,12 +167,15 @@ def _text(frame, text, size, color, bold=False):
         _east_asian(r.font)
 
 
-def _bullets(frame, items, size=20):
+def _bullets(frame, items, size=20, distribute=False):
     frame.word_wrap = True
+    if distribute:
+        frame.vertical_anchor = MSO_ANCHOR.MIDDLE
     for i, b in enumerate(items):
         p = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
         p.text = "•  " + str(b)
-        p.space_after = Pt(10)
+        p.space_after = Pt(16 if len(items) <= 3 else 11)
+        p.line_spacing = 1.12
         for r in p.runs:
             r.font.size = Pt(size)
             r.font.color.rgb = THEME["ink"]
@@ -131,6 +191,79 @@ def _fill_bg(slide, color):
     bg = slide.background.fill
     bg.solid()
     bg.fore_color.rgb = color
+
+
+_METRIC = re.compile(r"(?<![\d.])\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*(?:亿元|亿|千万|万元|万|元|%|％|个百分点|万人|家|人|小时|天|月)")
+
+
+def _metric_values(bullets: list[str]) -> list[tuple[str, str]]:
+    seen = set()
+    metrics = []
+    for bullet in bullets:
+        for match in _METRIC.finditer(str(bullet)):
+            value = match.group(0).strip()
+            if value in seen:
+                continue
+            seen.add(value)
+            label = str(bullet).replace(match.group(0), "", 1).strip(" ，,:：") or "关键指标"
+            metrics.append((value, label[:18]))
+            if len(metrics) == 3:
+                return metrics
+    return metrics
+
+
+def _metric_cards(slide, bullets: list[str]) -> None:
+    for i, (value, label) in enumerate(_metric_values(bullets)):
+        y = 1.75 + i * 1.65
+        shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(9.15), Inches(y), Inches(3.4), Inches(1.25))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor(0xEF, 0xF6, 0xFF)
+        shape.line.color.rgb = RGBColor(0xBF, 0xDB, 0xFE)
+        value_box = slide.shapes.add_textbox(Inches(9.4), Inches(y + 0.12), Inches(2.9), Inches(0.55))
+        _text(value_box.text_frame, value, 25, THEME["accent"], bold=True)
+        label_box = slide.shapes.add_textbox(Inches(9.4), Inches(y + 0.72), Inches(2.9), Inches(0.35))
+        _text(label_box.text_frame, label, 12, THEME["muted"])
+
+
+def _add_data_labels(plot):
+    plot.has_data_labels = True
+    labels = plot.data_labels
+    labels.show_value = True
+    labels.show_category_name = False
+    labels.font.size = Pt(11)
+    labels.font.color.rgb = THEME["ink"]
+    _east_asian(labels.font)
+
+
+def _set_value_axis_unit(chart, unit: str | None) -> None:
+    if not unit:
+        return
+    try:
+        chart.value_axis.has_title = True
+        frame = chart.value_axis.axis_title.text_frame
+        frame.text = str(unit)
+        for paragraph in frame.paragraphs:
+            for run in paragraph.runs:
+                run.font.size = Pt(11)
+                run.font.color.rgb = THEME["muted"]
+                _east_asian(run.font)
+    except (AttributeError, ValueError):
+        pass
+
+
+def _chart_key(chart: dict) -> tuple:
+    return (tuple(str(x) for x in chart.get("categories", [])),
+            tuple(tuple(round(float(v), 8) for v in s.get("values", []))
+                  for s in chart.get("series", [])))
+
+
+def _register_chart(chart: dict, seen: set[tuple]) -> bool:
+    """Remember a chart's categories and values and reject exact duplicates."""
+    key = _chart_key(chart)
+    if key in seen:
+        return False
+    seen.add(key)
+    return True
 
 
 def render(slides: list[dict], path: Path, title: str) -> Path:
@@ -198,8 +331,11 @@ def render(slides: list[dict], path: Path, title: str) -> Path:
                         ser.format.fill.fore_color.rgb = color
                 ch.value_axis.major_gridlines.format.line.color.rgb = RGBColor(0xE5, 0xE7, 0xEB)
                 ch.value_axis.format.line.fill.background()
+                _add_data_labels(plot)
+                _set_value_axis_unit(ch, chart.get("unit"))
             ch.has_legend = is_round or len(chart["series"]) > 1
             if is_round:
+                _add_data_labels(ch.plots[0])
                 for k, point in enumerate(ch.plots[0].series[0].points):
                     point.format.fill.solid()
                     point.format.fill.fore_color.rgb = PALETTE[k % len(PALETTE)]
@@ -210,8 +346,14 @@ def render(slides: list[dict], path: Path, title: str) -> Path:
                 _east_asian(ch.legend.font)
                 ch.legend.font.size = Pt(14)
         else:
-            body = slide.shapes.add_textbox(Inches(0.9), Inches(1.8), Inches(11.6), Inches(4.8))
-            _bullets(body.text_frame, s.get("bullets", []), 22)
+            bullets = list(s.get("bullets", []))
+            metrics = _metric_values(bullets)
+            body_w = 7.7 if metrics else 11.6
+            body = slide.shapes.add_textbox(Inches(0.9), Inches(1.8), Inches(body_w), Inches(4.8))
+            size = 24 if len(bullets) <= 3 else 22 if len(bullets) == 4 else 20
+            _bullets(body.text_frame, bullets, size, distribute=True)
+            if metrics:
+                _metric_cards(slide, bullets)
         if credit:
             _credit(slide, credit)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +393,7 @@ def build(brief: str, n_slides: int = 6, model_ids: list[str] | None = None, pro
     check = verify_outline(slides, brief, chart_m, progress)
     progress(f"数字核查：共 {check['checked']} 个数字，改写 {len(check['fixed'])} 页，删减 {len(check['removed'])} 页")
 
+    seen_charts = set()
     for s in slides[1:]:
         if s.get("kind") != "chart":
             continue
@@ -268,6 +411,10 @@ def build(brief: str, n_slides: int = 6, model_ids: list[str] | None = None, pro
             fake = unsupported_values(c, brief)
             if fake:
                 progress(f"拦截编造数据 {fake}（资料中没有），这页改用文字：{s.get('title')}")
+                continue
+            if not _register_chart(c, seen_charts):
+                s["kind"] = "bullets"
+                progress(f"图表与前页分类和数值完全重复，这页改用文字：{s.get('title')}")
                 continue
             s["chart"] = c
             if show_credits:

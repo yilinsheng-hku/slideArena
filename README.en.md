@@ -53,13 +53,13 @@ Test date: 2026-11-15 17:35:06; task bank: 23; repeats per task: 1; outline revi
 
 ## What It Tests
 
-The bank currently has 23 tasks, each with a human-checked reference answer. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
+The bank currently has 29 tasks, including 6 marked hard, each with a human-checked reference answer. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
 
 | Dimension | Tasks | What they test |
 |---|---|---|
-| Writing / outlines | Business reviews, pitch decks, school lessons, a corrected sales report ×4; condense source text into one slide ×3 | Use required facts, avoid unsupported numbers, catch corrected figures and rumors, distinguish percentage points from percentages, and follow slide/title/bullet limits |
-| Data charts | Create charts from source material ×9 | Exclude distracting totals, convert units, calculate growth and shares, sort values, select a period from a longer series, and refuse to invent missing data |
-| Layout | Chart page, hero image, four cards, dense text, two charts, and a five-step timeline ×6 | Keep elements in bounds and non-overlapping; fit text to font size and box width; keep card sizes consistent; give images enough area; place captions under their charts; order timeline steps |
+| Writing / outlines | Business reviews, pitch decks, school lessons, and a corrected sales report ×4, plus 2 hard reconciliation/contradiction outlines; condense source text into one slide ×3, plus 1 hard strict-length condensation | Use required facts, avoid unsupported numbers, catch corrected figures and rumors, distinguish percentage points from percentages, and follow slide/title/bullet limits |
+| Data charts | Create charts from source material ×9, plus 2 hard multi-series and two-step margin charts | Exclude distracting totals, convert units, calculate growth and shares, sort values, select a period from a longer series, compare multiple series, and refuse to invent missing data |
+| Layout | Chart page, hero image, four cards, dense text, two charts, a five-step timeline, and one hard tight-space layout ×7 | Keep elements in bounds and non-overlapping; **deduct text-fit points by overflow ratio**: required height divided by box height is full at 1.0, zero at 1.5, linear in between, with a 0.02-inch tolerance; keep card sizes consistent; give images enough area; place captions under their charts; order timeline steps |
 | Images | Generate one cover image, for image-capable endpoints | Whether image generation succeeds |
 | Speed | Median latency across text calls | Logarithmic score: 100 at 3 seconds or less, 0 at 60 seconds or more; each doubling costs the same number of points |
 
@@ -116,7 +116,7 @@ For each kind of work, routing first keeps models statistically tied with the le
 - Image tests check whether generation succeeds; they do not assess image quality.
 - Layout screenshots use a simplified renderer and do not represent PowerPoint's actual rendering.
 - Review models can have preferences. Reversed prompts and a third-party judge reduce position and self-review bias but cannot eliminate subjectivity.
-- The task bank currently has 23 tasks, focused mainly on Chinese business scenarios.
+- The task bank currently has 29 tasks, including 6 hard tasks with unit traps, two-step calculations, multi-series charts, strict word limits, and tight layouts; it is still focused mainly on Chinese business scenarios.
 
 ## Privacy
 

@@ -94,10 +94,12 @@ def _metadata(result: dict, english: bool) -> str:
     layout = by_dim.get("layout", 0)
     if english:
         review = f"outline review enabled ({outline} groups); visual layout review enabled ({layout} groups)"
-        return (f"Test date: {result.get('time', '—')}; task bank: 23; repeats per task: "
+        return (f"Test date: {result.get('time', '—')}; task bank: {result.get('bank_version', '—')} "
+                f"({result.get('question_count', '—')} tasks, {result.get('hard_count', '—')} hard); repeats per task: "
                 f"{result.get('repeats', '—')}; {review}. Results represent this task bank on this day only.")
     review = f"大纲评审：开启（{outline} 组）；排版视觉评审：开启（{layout} 组）"
-    return (f"测试日期：{result.get('time', '—')}；题库题数：23；每题重复次数：{result.get('repeats', '—')}；"
+    return (f"测试日期：{result.get('time', '—')}；题库版本：{result.get('bank_version', '—')}；题库题数：{result.get('question_count', '—')}（难题 {result.get('hard_count', '—')} 道）；"
+            f"每题重复次数：{result.get('repeats', '—')}；"
             f"{review}。结果只代表这套题库在这一天的表现。")
 
 

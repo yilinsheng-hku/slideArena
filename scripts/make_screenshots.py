@@ -193,6 +193,8 @@ def _libreoffice_render(pptx: Path, output: Path) -> list[Path]:
 
 
 def _deck_wall(pptx: Path) -> Path:
+    from slidearena import render
+
     with tempfile.TemporaryDirectory(prefix="slidearena_ppt_render_") as temp_name:
         temp = Path(temp_name)
         images = _powershell_render(pptx, temp)
@@ -205,6 +207,7 @@ def _deck_wall(pptx: Path) -> Path:
         images = images[:6]
         if len(images) < 6:
             raise RuntimeError(f"PPT 只有 {len(images)} 页，无法组成 2×3 缩略图墙")
+        label_font = render.chinese_font(18, required=True)
         thumbnails = []
         for image_path in images:
             with Image.open(image_path).convert("RGB") as image:
@@ -216,7 +219,7 @@ def _deck_wall(pptx: Path) -> Path:
             x = 20 + (index % 2) * 610
             y = 20 + (index // 2) * 346
             canvas.paste(image, (x, y))
-            draw.text((x, y + 322), f"第 {index + 1} 页", fill="#1F2937")
+            draw.text((x, y + 322), f"第 {index + 1} 页", fill="#1F2937", font=label_font)
         output = DOCS / "screenshot-deck.png"
         canvas.save(output, "PNG")
     _check_image(output)

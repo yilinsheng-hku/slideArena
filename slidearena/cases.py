@@ -14,6 +14,7 @@ Cases are deliberately harder than "copy these numbers":
 from __future__ import annotations
 
 SLIDE_W, SLIDE_H, MARGIN = 13.333, 7.5, 0.4
+BANK_VERSION = "2026.11-b"
 
 # --------------------------------------------------------------------------- outline (text)
 OUTLINE = [
@@ -128,6 +129,51 @@ OUTLINE = [
     },
 ]
 
+# Additional hard outline cases deliberately contain reconciliation and unit traps.
+OUTLINE.extend([
+    {
+        "id": "outline-hard-reconciliation", "level": "hard", "n": 6,
+        "brief": "给经营委员会做一份经过财务复核的年度经营复盘，突出单位换算和已更正数字。",
+        "material": ("2026 年全年营收初报 9.8 亿元，财务复核后为 9.6 亿元；2025 年全年营收 8.1 亿元。"
+                     "华东营收 4.2 亿元，华南营收 2.4 亿元，海外营收 1.6 亿元，其余为其他区域。"
+                     "研发投入 6,800 万元，研发人员 126 人；产品线 A 贡献营收 1.9 亿元。"
+                     "2027 年目标营收 11 亿元，研发投入率保持在 8% 以上。初报数字未经复核，不应直接使用。"),
+        "must_numbers": ["9.6亿", "8.1亿", "2.4亿", "6800万", "1.9亿", "11亿", "8%"],
+        "must_terms": ["财务复核", "华南", "研发投入", "产品线"], "check_numbers": True,
+        "wrong_patterns": [[r"9\.8\s*亿", "用了未经复核的 9.8 亿初报数字", r"初报|复核|更正"],
+                           [r"(?<![\d.])10\.5\s*亿", "把区域数字加错后写成 10.5 亿"]],
+        "reference": {"slides": [
+            {"title": "2026年度经营复盘", "bullets": ["经营委员会汇报"], "kind": "cover"},
+            {"title": "全年营收9.6亿元", "kind": "bullets", "bullets": ["财务复核后营收9.6亿元", "2025年营收8.1亿元", "复核数字作为正式口径"]},
+            {"title": "区域结构", "kind": "chart", "bullets": ["华东营收4.2亿元", "华南营收2.4亿元", "海外营收1.6亿元"]},
+            {"title": "研发投入与产品线", "kind": "bullets", "bullets": ["研发投入6800万元", "研发人员126人", "产品线A贡献营收1.9亿元"]},
+            {"title": "明年经营目标", "kind": "bullets", "bullets": ["2027年目标营收11亿元", "研发投入率保持8%以上", "以复核数据作为目标基线"]},
+            {"title": "复盘结论", "kind": "bullets", "bullets": ["正式营收以财务复核数字为准", "华南是重点增长区域", "研发投入支撑产品线A"]},
+        ]},
+    },
+    {
+        "id": "outline-hard-contradictions", "level": "hard", "n": 7,
+        "brief": "给董事会做一份多地区业务复盘，区分初步估算、已确认数字和外部传闻。",
+        "material": ("截至 2026 年 9 月，确认营收 27.4 亿元，其中华东 11.8 亿元、华南 6.3 亿元、华北 4.1 亿元，"
+                     "海外 3.2 亿元，其余区域 2.0 亿元。上半年报告曾写 26.9 亿元，已被审计更正。"
+                     "活跃客户 8,400 家，续约率 76.5%；重点行业客户贡献 5.7 亿元。"
+                     "市场部称行业平均增速 35%，但该数字尚未核实。四季度目标营收 10.2 亿元，续约率目标 80%。"),
+        "must_numbers": ["27.4亿", "11.8亿", "6.3亿", "4.1亿", "3.2亿", "8400", "76.5%", "5.7亿", "10.2亿", "80%"],
+        "must_terms": ["审计更正", "华东", "续约率", "四季度"], "check_numbers": True,
+        "wrong_patterns": [[r"26\.9\s*亿", "用了已被审计更正的 26.9 亿", r"更正"],
+                           [r"(?<![\d.])35\s*%", "写入尚未核实的行业增速 35%", r"尚未核实"]],
+        "reference": {"slides": [
+            {"title": "截至9月业务复盘", "bullets": ["董事会汇报"], "kind": "cover"},
+            {"title": "确认营收27.4亿元", "kind": "chart", "bullets": ["截至9月确认营收27.4亿元", "上半年26.9亿元为已更正数字", "审计更正后只采用确认值"]},
+            {"title": "多地区贡献", "kind": "chart", "bullets": ["华东11.8亿元，华南6.3亿元", "华北4.1亿元，海外3.2亿元", "其余区域2.0亿元"]},
+            {"title": "客户经营质量", "kind": "bullets", "bullets": ["活跃客户8400家", "续约率76.5%", "重点行业客户贡献5.7亿元"]},
+            {"title": "外部数据谨慎使用", "kind": "bullets", "bullets": ["行业平均增速35%尚未核实", "经营判断只使用内部确认数据", "避免把传闻写入结论"]},
+            {"title": "四季度目标", "kind": "bullets", "bullets": ["目标营收10.2亿元", "续约率目标80%", "围绕重点行业客户制定计划"]},
+            {"title": "董事会决策要点", "kind": "bullets", "bullets": ["保持华东领先并扩大华南", "提升续约率和客户质量", "四季度目标以确认数据为基线"]},
+        ]},
+    },
+])
+
 # --------------------------------------------------------------------------- condense (text)
 CONDENSE = [
     {
@@ -161,6 +207,16 @@ CONDENSE = [
             "降幅来自新用户，老用户持平7.9%", "安卓退款1,320笔，环比减少15%"]},
     },
 ]
+
+# A strict-length hard condensation case.
+CONDENSE.append({
+    "id": "condense-hard-tight", "level": "hard", "max_bullets": 3, "max_len": 16,
+    "material": ("Q4 客服中心处理工单 21.4 万张，同比增长 18%；平均首次响应时间降至 1.2 小时；"
+                 "客户满意度 94.1%，提升 2.8 个百分点；夜间投诉占比 31%，主要集中在退款和物流查询。"),
+    "must_numbers": ["21.4万", "1.2", "94.1%", "31%"],
+    "must_terms": ["客服", "夜间投诉"],
+    "reference": {"title": "Q4客服运营", "bullets": ["工单21.4万张，增18%", "响应1.2小时，满意度94.1%", "夜间投诉占比31%"]},
+})
 
 # --------------------------------------------------------------------------- chart (data)
 CHART = [
@@ -258,6 +314,35 @@ CHART = [
     },
 ]
 
+# Hard chart cases require multiple series and a two-step calculation.
+CHART.extend([
+    {
+        "id": "chart-hard-multiseries", "level": "hard",
+        "material": ("三大区域 2025 年营收：华东 6.0 亿元、华南 2.5 亿元、海外 1.2 亿元；"
+                     "2026 年营收：华东 7.2 亿元、华南 3.4 亿元、海外 1.8 亿元。"),
+        "ask": "用两条系列对比三大区域 2025 和 2026 年营收，单位：亿元",
+        "categories": ["华东", "华南", "海外"], "values": [6.0, 2.5, 1.2],
+        "series_values": [[6.0, 2.5, 1.2], [7.2, 3.4, 1.8]], "good_types": ["bar", "column"],
+        "reference": {"chart_type": "column", "title": "区域营收对比", "unit": "亿元",
+                      "categories": ["华东", "华南", "海外"],
+                      "series": [{"name": "2025年", "values": [6.0, 2.5, 1.2]},
+                                  {"name": "2026年", "values": [7.2, 3.4, 1.8]}],
+                      "takeaway": "三大区域均增长"},
+    },
+    {
+        "id": "chart-hard-twostep", "level": "hard",
+        "material": ("三条产品线收入和成本：智能硬件收入 4.8 亿元、成本 3.1 亿元；"
+                     "云服务收入 2.6 亿元、成本 1.82 亿元；专业服务收入 1.2 亿元、成本 0.9 亿元。"),
+        "ask": "先用（收入－成本）/收入计算毛利率，再按毛利率从高到低对比，单位：%",
+        "categories": ["智能硬件", "云服务", "专业服务"], "values": [35.4, 30.0, 25.0], "tol": 0.1,
+        "good_types": ["bar", "column"],
+        "reference": {"chart_type": "bar", "title": "产品线毛利率", "unit": "%",
+                      "categories": ["智能硬件", "云服务", "专业服务"],
+                      "series": [{"name": "毛利率", "values": [35.4, 30.0, 25.0]}],
+                      "takeaway": "智能硬件毛利率最高"},
+    },
+])
+
 # --------------------------------------------------------------------------- layout
 # Text elements list their paragraphs; "visual" elements have no text.
 LAYOUT = [
@@ -348,6 +433,28 @@ LAYOUT = [
     },
 ]
 
+# Hard layout case: seven elements in a tight two-row grid.
+LAYOUT.append({
+    "id": "layout-hard-tight", "level": "hard", "desc": "六个信息块在标题下方两行三列紧凑排布，所有文字清晰可读",
+    "elements": {"title": ["经营重点"],
+                 "block1": ["营收同比增长24%", "保持增长"],
+                 "block2": ["毛利率38.5%", "利润承压"],
+                 "block3": ["客户8400家", "规模扩大"],
+                 "block4": ["续约率76.5%", "需要提升"],
+                 "block5": ["研发投入6800万元", "支撑产品"],
+                 "block6": ["Q4目标10.2亿元", "聚焦执行"]},
+    "uniform": ["block1", "block2", "block3", "block4", "block5", "block6"],
+    "reference": {"elements": [
+        {"role": "title", "x": 0.6, "y": 0.45, "w": 12.13, "h": 0.8, "font_size": 32},
+        {"role": "block1", "x": 0.6, "y": 1.7, "w": 3.85, "h": 2.1, "font_size": 18},
+        {"role": "block2", "x": 4.74, "y": 1.7, "w": 3.85, "h": 2.1, "font_size": 18},
+        {"role": "block3", "x": 8.88, "y": 1.7, "w": 3.85, "h": 2.1, "font_size": 18},
+        {"role": "block4", "x": 0.6, "y": 4.2, "w": 3.85, "h": 2.1, "font_size": 18},
+        {"role": "block5", "x": 4.74, "y": 4.2, "w": 3.85, "h": 2.1, "font_size": 18},
+        {"role": "block6", "x": 8.88, "y": 4.2, "w": 3.85, "h": 2.1, "font_size": 18},
+    ]},
+})
+
 IMAGE = [
     {"id": "image-cover", "prompt": "简洁的科技感 PPT 封面插画，蓝色调，抽象的数据流线条，没有文字，16:9"},
 ]
@@ -364,6 +471,8 @@ OUTLINE_PROMPT = """[task:outline]
 - 第一页是封面；
 - 每页标题不超过 16 个字；除封面外每页 3-5 条要点，每条不超过 28 个字；
 - 用上资料里的关键数字；所有数字必须来自资料，或由资料里的数字直接算出，不能编造；
+- 推算数字保留的小数位数不能多于原始资料，禁止输出多余精度（例如 17.2 × 38.5% 应写 6.6 亿元，不写 6.622 亿元）；
+- 不要在要点中写算式、乘除等号或“测算口径”说明；每条要点都要是一句完整、通顺的话；
 - kind 从 cover / bullets / chart / image / quote 中选一个，表示这页最适合的形式。
 输出格式：{{"slides": [{{"title": "...", "bullets": ["..."], "kind": "bullets"}}]}}"""
 
@@ -382,6 +491,7 @@ CHART_PROMPT = """[task:chart]
 - values 只填数字，单位按要求统一换算；
 - 只放与要求相关的数据，不要放无关的数字；
 - 需要计算的请算准确，保留 1 位小数；
+- 推算结果的小数位数不能多于原始数据；不要把计算过程、×、÷、= 或“测算口径”写进图表标题、结论或标签；
 - 如果资料里没有足够的数据画这张图，只输出 {{"skip": true}}，不要编造。
 chart_type 从 bar / column / line / pie / doughnut 中选。
 输出格式：{{"chart_type": "column", "title": "...", "unit": "...", "categories": ["..."], "series": [{{"name": "...", "values": [1.0]}}], "takeaway": "一句话结论"}}"""

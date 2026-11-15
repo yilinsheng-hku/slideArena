@@ -83,7 +83,7 @@
 <section id="bench">
   <div class="card">
     <h2>一键能力测试</h2>
-    <p class="hint">题库共 23 道题：写大纲 ×4、压缩成一页 ×3、从资料做图表 ×9、排版 ×6，并包含配图生成测试。
+    <p class="hint">题库共 29 道题：写大纲 ×6、压缩成一页 ×4、从资料做图表 ×11、排版 ×7，并包含配图生成测试。
       全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。接入 3 个以上模型时，大纲还会由第三方模型<b>两两对比</b>评审（每组正反各问一次，抵消位置偏差），<b>不会自己评自己</b>。</p>
     <div id="bench-pick" class="row" style="margin-bottom:12px"></div>
     <div class="row" style="margin:0 0 12px">
@@ -220,6 +220,7 @@ function drawBoard(b) {
     return `<td><div class="score"><b class="${x.rank === 'leader' ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}</td>`;
   };
   const parts = p => Object.entries(p || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+  const caseStats = Object.fromEntries((b.case_stats || []).map(x => [x.task, x]));
   const pw = (b.pairwise && b.pairwise.log) || [];
   const pairCounts = (b.pairwise && b.pairwise.by_dim) || {};
   const outlinePw = pw.filter(p => p.kind !== 'layout');
@@ -228,15 +229,16 @@ function drawBoard(b) {
     ${logs.map(p => `<tr><td>${esc(p.case)}</td><td>${esc(name(p.a))} vs ${esc(name(p.b))}</td><td>${esc(name(p.judge))}</td>
       <td>${esc((p.votes || []).join(' / '))}</td><td>${p.result === 'tie' ? '平局' : esc(p.result === '评审失败' ? '评审失败' : name(p.result))}</td></tr>`).join('')}
     </tbody></table>`;
-  $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
+  $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 题库 ${esc(b.bank_version || '—')} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
       👑 该项第一 · <span class="tag">并列</span> 与第一的差距在统计误差内 · 区间为 90% 置信区间</p>
+    ${b.case_stats ? `<p class="hint">共 ${b.question_count || b.case_stats.length} 道题，其中 ${b.case_stats.filter(x => x.saturated).length} 道饱和。</p>` : ''}
     <table><thead><tr><th>模型</th>${DIMS.map(d => `<th>${d[1]}</th>`).join('')}<th>中位耗时</th><th>token/次</th><th>失败</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.m.name)}</b></td>${DIMS.map(([d]) => cell(r, d)).join('')}
       <td>${r.s.median_latency ?? '—'}s</td><td>${r.s.tokens_per_call ?? '—'}</td><td class="${r.s.errors ? 'err' : ''}">${r.s.errors || 0}${r.s.skipped ? `<br><small>限流未计分 ${r.s.skipped} 题</small>` : ''}</td></tr>`).join('')}
     </tbody></table>
     <details><summary>查看每道题的得分、分项和扣分原因</summary>
     <table><thead><tr><th>模型</th><th>题目</th><th>得分</th><th>分项</th><th>说明</th></tr></thead><tbody>
-    ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${x.rep ? ` #${x.rep + 1}` : ''}</td>
+    ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${caseStats[x.task]?.saturated ? ' <span class="tag">饱和</span>' : ''}${x.rep ? ` #${x.rep + 1}` : ''}</td>
       <td class="${x.error ? 'err' : ''}">${x.skipped ? '限流未计分' : x.error ? '失败' : Math.round(x.score)}</td>
       <td class="hint" style="font-size:12px">${esc(parts(x.parts))}</td>
       <td>${x.dimension === 'image' && x.answer ? `<img src="${x.answer}" style="height:60px;border-radius:4px">` : ''} ${esc((x.notes || []).join('；') || '全部达标')}</td></tr>`).join('')}

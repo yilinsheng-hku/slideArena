@@ -157,16 +157,19 @@ def score_chart(data, case) -> tuple[float, dict, list[str]]:
     notes = []
     try:
         series = data["series"]
-        vals = [float(v) for v in series[0]["values"]]
+        vals_by_series = [[float(v) for v in item["values"]] for item in series]
     except (KeyError, IndexError, TypeError, ValueError):
         return 0.0, {}, ["没有可用的数值"]
-    want = case["values"]
+    want_by_series = case.get("series_values") or [case["values"]]
     tol_abs = case.get("tol", 0.051)
-    right = sum(1 for i, w in enumerate(want)
-                if i < len(vals) and abs(vals[i] - w) <= max(tol_abs, 0.006 * abs(w)))
-    p_vals = 60 * right / len(want)
-    if right < len(want):
-        notes.append(f"{len(want) - right}/{len(want)} 个数值不对（应为 {want}，给出 {vals}）")
+    total_values = sum(len(want) for want in want_by_series)
+    right = 0
+    for got, want in zip(vals_by_series, want_by_series):
+        right += sum(1 for i, expected in enumerate(want)
+                     if i < len(got) and abs(got[i] - expected) <= max(tol_abs, 0.006 * abs(expected)))
+    p_vals = 60 * right / max(1, total_values)
+    if right < total_values:
+        notes.append(f"{total_values - right}/{total_values} 个数值不对（应为 {want_by_series}，给出 {vals_by_series}）")
     cats = [norm_cat(c) for c in (data.get("categories") or [])]
     want_c = [norm_cat(c) for c in case["categories"]]
     c_right = sum(1 for i, w in enumerate(want_c) if i < len(cats) and cats[i] == w)
@@ -177,7 +180,9 @@ def score_chart(data, case) -> tuple[float, dict, list[str]]:
     p_type = 10.0 if ctype in case["good_types"] else 0.0
     if not p_type:
         notes.append(f"图表类型 {ctype or '空'} 不适合")
-    clean = len(series) == 1 and len(vals) == len(want) and len(cats) == len(want_c)
+    clean = len(series) == len(want_by_series) and all(
+        len(got) == len(want) == len(want_c) for got, want in zip(vals_by_series, want_by_series)
+    ) and len(cats) == len(want_c)
     p_clean = 10.0 if clean else 0.0
     if not clean:
         notes.append("混入了无关数据或多余系列")
@@ -189,7 +194,7 @@ def score_chart(data, case) -> tuple[float, dict, list[str]]:
 TEXT_INNER_PADDING_IN = 0.1
 TEXT_LINE_HEIGHT_EM = 1.25
 TEXT_PARAGRAPH_GAP_EM = 0.3
-TEXT_FIT_TOLERANCE_IN = 0.05
+TEXT_FIT_TOLERANCE_IN = 0.02
 
 
 def _visual_len(s: str) -> float:
@@ -207,7 +212,22 @@ def text_height(paras: list[str], w_in: float, font_pt: float) -> float:
 
 def text_fits(paras: list[str], w_in: float, font_pt: float, h_in: float) -> bool:
     """Return the shared rule for whether text fits in a box."""
-    return text_height(paras, w_in, font_pt) <= h_in + TEXT_FIT_TOLERANCE_IN
+    return text_fit_ratio(paras, w_in, font_pt, h_in) <= 1.0
+
+
+def text_fit_ratio(paras: list[str], w_in: float, font_pt: float, h_in: float) -> float:
+    """Return required height divided by available height.
+
+    The small tolerance keeps a glyph that lands within 0.02 inches of the
+    lower edge from being penalized, while still exposing gradual overflow to
+    the scorer and the renderer.
+    """
+    return text_height(paras, w_in, font_pt) / max(0.05, h_in + TEXT_FIT_TOLERANCE_IN)
+
+
+def text_fit_score(ratio: float) -> float:
+    """Map fit ratio to a 0..1 score: full at 1.0, zero at 1.5."""
+    return max(0.0, min(1.0, (1.5 - ratio) / 0.5))
 
 
 def _overlap(a, b) -> float:
@@ -246,7 +266,7 @@ def score_layout(data, case) -> tuple[float, dict, list[str]]:
         notes.append(f"元素重叠 {ov:.2f} 平方英寸")
 
     text_roles = [r for r in present if spec[r] is not None]
-    fit_ok, font_ok = 0, 0
+    fit_scores, font_ok = [], 0
     for r in text_roles:
         e = els[r]
         try:
@@ -260,12 +280,13 @@ def score_layout(data, case) -> tuple[float, dict, list[str]]:
         else:
             notes.append(f"{r} 字号 {fs:g} 不在 {lo}-{hi}")
         need = text_height(spec[r], e["w"], fs)
-        if text_fits(spec[r], e["w"], fs, e["h"]):
-            fit_ok += 1
-        else:
-            notes.append(f"{r} 文字放不下（需要 {need:.2f} 英寸高，只给了 {e['h']:.2f}）")
+        ratio = text_fit_ratio(spec[r], e["w"], fs, e["h"])
+        fit_scores.append(text_fit_score(ratio))
+        if ratio > 1.0:
+            overflow = max(0.0, (ratio - 1.0) * 100)
+            notes.append(f"{r} 文字超出约 {overflow:.0f}%（需要 {need:.2f} 英寸高，只给了 {e['h']:.2f}）")
     n_text = max(1, len(text_roles))
-    p_fit = 25 * fit_ok / n_text
+    p_fit = 25 * sum(fit_scores) / n_text
     p_font = 10 * font_ok / n_text
 
     checks, passed = 0, 0

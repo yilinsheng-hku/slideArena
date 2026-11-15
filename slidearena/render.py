@@ -17,7 +17,7 @@ from .scoring import (
     TEXT_INNER_PADDING_IN,
     TEXT_LINE_HEIGHT_EM,
     TEXT_PARAGRAPH_GAP_EM,
-    text_fits,
+    text_fit_ratio,
 )
 
 DPI = 72                      # 1 pt = 1 px, 13.333 x 7.5 in -> 960 x 540
@@ -47,18 +47,35 @@ _using_default_font = False
 _warned_missing_font = False
 
 
+def _find_font(px: int):
+    px = max(6, int(px))
+    for path in _FONTS:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, px)
+            except OSError:
+                continue
+    return None
+
+
+def chinese_font(px: int, required: bool = False):
+    """Return a font from the shared Chinese font search path.
+
+    ``required=True`` is for generated public screenshots: emitting a bitmap with
+    missing glyph boxes is worse than stopping and asking for a font to be installed.
+    The renderer itself keeps its historical Pillow fallback when ``required`` is false.
+    """
+    font = _find_font(px)
+    if font is None and required:
+        raise RuntimeError("未找到中文字体，无法生成不会乱码的截图")
+    return font or _font(px)
+
+
 def _font(px: int):
     global _using_default_font, _warned_missing_font
     px = max(6, int(px))
     if px not in _font_cache:
-        f = None
-        for path in _FONTS:
-            if os.path.exists(path):
-                try:
-                    f = ImageFont.truetype(path, px)
-                    break
-                except OSError:
-                    continue
+        f = _find_font(px)
         if f is None:
             _using_default_font = True
             if not _warned_missing_font:
@@ -126,17 +143,29 @@ def render_layout(data, case, scale: float = 1.0) -> bytes:
         pad = TEXT_INNER_PADDING_IN * px
         cy = y + pad
         line_h = size * TEXT_LINE_HEIGHT_EM * scale
-        fits = text_fits(paras, w / px, size, h / px)
+        ratio = text_fit_ratio(paras, w / px, size, h / px)
+        severe_overflow = ratio >= 1.5
         for i, p in enumerate(paras):
             bullet = "" if is_title or is_card or len(paras) == 1 else "• "
-            colour = "#DC2626" if not fits else ACCENT if (is_card and i == 0) else INK
+            colour = ACCENT if (is_card and i == 0) else INK
             text = bullet + p
             if _using_default_font:
                 text = "".join(ch if ord(ch) < 128 else "?" for ch in text)
             for line in _wrap(draw, text, font, w - 2 * pad):
-                draw.text((x + pad, cy), line, font=font, fill=colour)
+                line_colour = "#FCA5A5" if cy + line_h > y + h else colour
+                draw.text((x + pad, cy), line, font=font, fill=line_colour)
                 cy += line_h
             cy += size * TEXT_PARAGRAPH_GAP_EM * scale
+        if ratio > 1.0:
+            dash_y = y + h - 2 * scale
+            dash = max(3, int(8 * scale))
+            gap = max(2, int(5 * scale))
+            xx = x + pad
+            while xx < x + w - pad:
+                draw.line([xx, dash_y, min(xx + dash, x + w - pad), dash_y], fill="#DC2626", width=max(1, int(2 * scale)))
+                xx += dash + gap
+        if severe_overflow:
+            draw.rectangle([x, y, x + w, y + h], outline="#DC2626", width=max(1, int(2 * scale)))
         if is_title:
             draw.line([x + pad, y + h - 2, x + pad + 60 * scale, y + h - 2], fill=ACCENT, width=int(3 * scale))
     buf = io.BytesIO()

@@ -161,6 +161,9 @@ def main():
                                  "model": "fake-judge", "api_key": "env:SA_TEST_KEY"})
     r = benchmark.run([oa["id"], an["id"], bad["id"]], judge_ids=[oa["id"], an["id"], judge["id"]],
                       progress=lambda m: None)
+    check(r["bank_version"] == "2026.11-b" and r["question_count"] == 29 and
+          isinstance(r["case_stats"], list) and all("range" in item and "stdev" in item for item in r["case_stats"]),
+          "benchmark 结果包含题库版本和逐题区分度")
     s = r["scores"]
     d_oa = s[oa["id"]]["dims"]
     check(all(d_oa[k]["score"] == 100 for k in ("text", "chart", "layout")),
@@ -189,11 +192,43 @@ def main():
     check(len(pics) == 1, "封面插入了配图")
     check("5.3" not in all_text and out["fact_check"]["fixed"], f"大纲里编造的数字被核查并改写 {out['fact_check']}")
 
+    # Deck quality guards: text pages use larger, vertically centered text and
+    # preserve source numbers in the metric cards; chart labels and units stay editable.
+    quality_path = Path(tempfile.mkdtemp(prefix="sa_quality_")) / "quality.pptx"
+    deck.render([{"title": "封面", "bullets": ["演示"], "made_by": {}},
+                 {"title": "关键经营指标", "bullets": ["营收17.2亿元", "毛利率38.5%", "人力成本4.6亿元"],
+                  "made_by": {}}], quality_path, "关键经营指标")
+    quality_prs = Presentation(quality_path)
+    quality_text = "\n".join(sh.text for sh in quality_prs.slides[1].shapes if sh.has_text_frame)
+    body_sizes = [run.font.size.pt for sh in quality_prs.slides[1].shapes
+                  if sh.has_text_frame and "营收17.2亿元" in sh.text
+                  for paragraph in sh.text_frame.paragraphs for run in paragraph.runs if run.font.size]
+    check("17.2亿元" in quality_text and "38.5%" in quality_text and len(body_sizes) > 0 and max(body_sizes) >= 24,
+          "纯文字页保留关键数字并使用大字号")
+    chart_slide = [{"title": "封面", "bullets": ["演示"], "made_by": {}}, {"title": "营收趋势", "bullets": ["营收持续增长"], "chart": {
+        "chart_type": "column", "unit": "亿元", "categories": ["Q1", "Q2"],
+        "series": [{"name": "营收", "values": [12.5, 14.8]}], "takeaway": "逐季增长"}, "made_by": {}}]
+    chart_path = quality_path.parent / "chart.pptx"
+    deck.render(chart_slide, chart_path, "营收趋势")
+    chart_prs = Presentation(chart_path)
+    chart_obj = next(sh.chart for sh in chart_prs.slides[1].shapes if sh.has_chart)
+    check(chart_obj.plots[0].has_data_labels and chart_obj.value_axis.has_title and
+          chart_obj.value_axis.axis_title.text_frame.text == "亿元", "图表显示数据标签和数值轴单位")
+    outline = [{"title": "精度检查", "bullets": ["测算口径：17.2×38.5%=6.622亿元", "营收17.2亿元"]}]
+    deck.verify_outline(outline, "营收17.2亿元，毛利率38.5%", None, lambda _msg: None)
+    check(outline[0]["bullets"] == ["营收17.2亿元"], "算式和口径说明会被删除")
+    precise = [{"title": "精度检查", "bullets": ["推算结果为6.622亿元"]}]
+    deck.verify_outline(precise, "营收17.2亿元，毛利率38.5%", None, lambda _msg: None)
+    check(precise[0]["bullets"] == ["推算结果为6.6亿元"], "推算数字按资料精度四舍五入")
+
     fake_chart = {"categories": ["Q1", "Q2"], "series": [{"name": "成本", "values": [3.2, 4.1]}]}
     real_chart = {"categories": ["Q1", "Q2"], "series": [{"name": "营收", "values": [12.5, 14.8]}]}
     brief = "营收 Q1 12.5 亿、Q2 14.8 亿"
     check(deck.unsupported_values(fake_chart, brief) == [3.2, 4.1] and not deck.unsupported_values(real_chart, brief),
           "资料里没有的数字会被识别为编造数据")
+    seen_charts = set()
+    check(deck._register_chart(real_chart, seen_charts) and not deck._register_chart(real_chart, seen_charts),
+          "分类和数值完全重复的图表会被改成文字页")
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

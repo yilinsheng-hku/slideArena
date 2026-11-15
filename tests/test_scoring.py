@@ -102,8 +102,21 @@ short_title = copy.deepcopy(lc["layout-chart"]["reference"])
 title = next(e for e in short_title["elements"] if e["role"] == "title")
 title["h"] = 0.1
 _, parts, notes = S.score_layout(short_title, lc["layout-chart"])
-check(parts["文字放得下"] < 25 and any("title 文字放不下" in n for n in notes), "规则判定过矮标题框溢出")
+check(parts["文字放得下"] < 25 and any("title 文字超出" in n for n in notes), "规则判定过矮标题框溢出")
 check(has_overflow_red(render.render_layout(short_title, lc["layout-chart"])), "渲染将过矮标题标红")
+
+# Text-fit points now decline with the amount of overflow instead of dropping to zero.
+for overflow, expected in ((0.05, 23.0), (0.30, 10.0), (0.60, 0.0)):
+    sample = copy.deepcopy(lc["layout-chart"]["reference"])
+    for element in sample["elements"]:
+        if element["role"] not in ("title", "body"):
+            continue
+        paras = lc["layout-chart"]["elements"][element["role"]]
+        need = S.text_height(paras, element["w"], element["font_size"])
+        element["h"] = need / (1 + overflow) - S.TEXT_FIT_TOLERANCE_IN
+    fit_score = S.score_layout(sample, lc["layout-chart"])[1]["文字放得下"]
+    check((fit_score <= expected + 1.0 and fit_score >= expected - 1.0),
+          f"文字超出 {overflow:.0%} 时按比例扣分（{fit_score:.1f}）")
 
 saved_fonts = render._FONTS
 saved_font_cache = render._font_cache.copy()
@@ -176,6 +189,13 @@ check(S.score_chart({"chart_type": "column", "categories": ["2026年7月", "8月
 check(S.score_chart({"chart_type": "column", "categories": ["Q1", "Q2", "Q3"],
                      "series": [{"values": [12.5, 14.0, 17.2]}]}, ch["chart-partial"])[0] == 0,
       "缺一个数据点时猜一个数，判 0 分")
+hard_multi = next(c for c in C.CHART if c["id"] == "chart-hard-multiseries")
+check(S.score_chart(hard_multi["reference"], hard_multi)[0] == 100, "多系列 hard 图表参考答案满分")
+hard_recs = [{"model_id": "a", "task": "hard", "dimension": "chart", "score": 100},
+             {"model_id": "b", "task": "hard", "dimension": "chart", "score": 96}]
+case_spread = benchmark.summarize_cases(hard_recs, [{"id": "a"}, {"id": "b"}])
+check(case_spread[0]["range"] == 4 and case_spread[0]["stdev"] == 2 and not case_spread[0]["saturated"],
+      "题目区分度包含极差、标准差和饱和标记")
 
 # ---------------------------------------------------------------- 4. statistics
 check(T.separable([90, 95, 92, 94, 96], [70, 72, 75, 71, 73]) == 1, "明显差距被判定为有差别")

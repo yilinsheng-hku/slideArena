@@ -81,6 +81,9 @@ def print_board(r: dict) -> None:
         by = pw.get("by_dim") or {"text": pw["judged"]}
         parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 组" for d, n in by.items() if n]
         print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%）")
+    case_stats = r.get("case_stats", [])
+    if case_stats:
+        print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")
 
 
 def cmd_bench(a):

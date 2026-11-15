@@ -35,6 +35,7 @@ from . import config, llm, render, scoring, stats
 
 DIMENSIONS = {"text": "文字 / 大纲", "layout": "排版", "chart": "数据图表", "image": "配图", "speed": "速度"}
 QUALITY_DIMS = ("text", "layout", "chart")
+ALL_CASES = [c for bank in (C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT, C.IMAGE) for c in bank]
 
 # kept for deck.py and older callers
 SYS = C.SYS
@@ -304,6 +305,30 @@ def summarize(records: list[dict], models: list[dict], pair: dict | None = None)
     return out
 
 
+def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
+    """Summarize per-question spread so saturated questions are visible."""
+    by_task: dict[str, dict[str, list[float]]] = {}
+    meta = {c["id"]: c for c in ALL_CASES}
+    for rec in records:
+        if rec.get("skipped") or rec.get("error"):
+            continue
+        by_task.setdefault(rec["task"], {}).setdefault(rec["model_id"], []).append(float(rec.get("score", 0)))
+    out = []
+    for task, by_model in by_task.items():
+        scores = {mid: round(statistics.mean(values), 1) for mid, values in by_model.items()}
+        values = list(scores.values())
+        if not values:
+            continue
+        case = meta.get(task, {})
+        out.append({"task": task,
+                    "dimension": next((r["dimension"] for r in records if r["task"] == task), ""),
+                    "level": case.get("level", "standard"), "scores": scores,
+                    "range": round(max(values) - min(values), 1),
+                    "stdev": round(statistics.pstdev(values), 1),
+                    "saturated": len(scores) == len(models) and all(value >= 98 for value in values)})
+    return sorted(out, key=lambda item: item["task"])
+
+
 def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print, repeats: int = 1,
         pairwise: bool = True, dims: list[str] | None = None, visual: bool = True) -> dict:
     """dims: only test these dimensions (e.g. ["layout"]); visual: judge layout screenshots pairwise."""
@@ -341,7 +366,10 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
 
     scores = summarize(records, models, pair)
     logs = [x for p in pair.values() for x in p.get("log", [])]
-    result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": 2, "repeats": repeats,
+    case_stats = summarize_cases(records, models)
+    result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": 2, "bank_version": C.BANK_VERSION,
+              "question_count": len(case_stats), "hard_count": sum(c.get("level") == "hard" for c in ALL_CASES),
+              "case_stats": case_stats, "repeats": repeats,
               "duration": round(time.time() - t0, 1),
               "models": [config.public_model(m) for m in models],
               "records": [{k: v for k, v in r.items() if k != "parsed"} for r in records],
