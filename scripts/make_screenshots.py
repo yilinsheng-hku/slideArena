@@ -213,13 +213,13 @@ def _deck_wall(pptx: Path) -> Path:
             with Image.open(image_path).convert("RGB") as image:
                 image.thumbnail((600, 338))
                 thumbnails.append(image.copy())
-        canvas = Image.new("RGB", (1220, 1060), "#E5E7EB")
+        canvas = Image.new("RGB", (1260, 1184), "#E5E7EB")
         draw = ImageDraw.Draw(canvas)
         for index, image in enumerate(thumbnails):
-            x = 20 + (index % 2) * 610
-            y = 20 + (index // 2) * 346
+            x = 20 + (index % 2) * 620
+            y = 20 + (index // 2) * 388
             canvas.paste(image, (x, y))
-            draw.text((x, y + 322), f"第 {index + 1} 页", fill="#1F2937", font=label_font)
+            draw.text((x, y + 342), f"第 {index + 1} 页", fill="#1F2937", font=label_font)
         output = DOCS / "screenshot-deck.png"
         canvas.save(output, "PNG")
     _check_image(output)
@@ -228,7 +228,7 @@ def _deck_wall(pptx: Path) -> Path:
 
 
 def _visual_judge(record: dict) -> Path:
-    from slidearena import cases, render
+    from slidearena import cases, llm, render
     layout_records = [r for r in record["records"] if r.get("kind") == "layout" and r.get("answer")]
     by_task: dict[str, list[dict]] = {}
     for item in layout_records:
@@ -243,9 +243,9 @@ def _visual_judge(record: dict) -> Path:
     cell_w, cell_h = 420, 236
     canvas = Image.new("RGB", (cell_w * 3, cell_h + 76), "#FFFFFF")
     draw = ImageDraw.Draw(canvas)
-    font = render._font(18)
+    font = render.chinese_font(18, required=True)
     for index, item in enumerate(selected):
-        data = json.loads(item["answer"])
+        data = llm.extract_json(item["answer"])
         image = Image.open(io.BytesIO(render.render_layout(data, case, scale=0.44))).convert("RGB")
         canvas.paste(image.resize((cell_w, cell_h)), (index * cell_w, 0))
         image.close()
@@ -266,9 +266,6 @@ def main() -> int:
         print(f"找不到 {benchmark_path}，无法生成真实结果截图。")
         return 1
     pptx_files = sorted(output_dir.glob("*.pptx"), key=lambda path: path.stat().st_mtime)
-    if not pptx_files:
-        print(f"{output_dir} 下没有 PPTX，无法生成真实结果截图。")
-        return 1
     history = json.loads(benchmark_path.read_text(encoding="utf-8"))
     if not isinstance(history, list) or not history:
         print("benchmarks.json 没有可用记录。")
@@ -281,10 +278,17 @@ def main() -> int:
     safe_profiles = _safe_copy(profiles)
     _assert_public_json(safe_profiles)
     DOCS.mkdir(exist_ok=True)
-    _leaderboard(record, safe_profiles)
-    _deck_wall(pptx_files[-1])
-    _visual_judge(record)
-    print("已生成 docs/screenshot-leaderboard.png、docs/screenshot-deck.png、docs/visual-judge.png")
+    _leaderboard(safe_record, safe_profiles)
+    _visual_judge(safe_record)
+    deck_image = DOCS / "screenshot-deck.png"
+    if pptx_files and (not deck_image.exists() or pptx_files[-1].stat().st_mtime > deck_image.stat().st_mtime):
+        _deck_wall(pptx_files[-1])
+    elif deck_image.exists():
+        print("没有比现有截图更新的 PPTX，保留 docs/screenshot-deck.png")
+    else:
+        print("没有 PPTX 或现有 PPT 截图，排行榜和视觉评审图已更新")
+        return 1
+    print("已更新排行榜和视觉评审截图；PPT 截图仅在有更新文件时生成")
     return 0
 
 

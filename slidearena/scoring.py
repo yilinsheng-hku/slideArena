@@ -92,7 +92,7 @@ def score_outline(data, case) -> tuple[float, dict, list[str]]:
         if bad:
             notes.append("资料里没有依据的数字：" + "、".join(bad[:6]))
         if rep["unverifiable"]:
-            notes.append(f"{len(rep['unverifiable'])} 个数字精度太粗无法核实（不扣分）")
+            notes.append(f"{len(rep['unverifiable'])} 个数字因精度较粗或推算关系无法严格核实（不扣分）")
     else:
         faith = 30.0
     traps = known_traps(text, case)

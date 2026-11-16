@@ -38,11 +38,11 @@ slidearena make "Create a Q3 business review for leadership: revenue was 1.25B i
 
 | Model | Text | Layout | Charts | Speed | Median latency | Tokens/call | Failures |
 |---|---|---|---|---|---|---|---|
-| DeepSeek · deepseek-flash | 96.7 (behind) | 100.0 (leader) | 100.0 (leader) | 56.9 (leader) | 10.91s | 1663 | 0 |
-| GPT · gpt-6.1-sol | 94.5 (behind) | 85.0 (behind) | 100.0 (tied) | 48.0 (behind) | 14.26s | 4882 | 0 |
-| Kimi · kimi-k3 | 100.0 (leader) | 100.0 (tied) | 100.0 (tied) | 35.7 (behind) | 20.6s | 1800 | 0 |
+| DeepSeek · deepseek-flash | 97.2 (leader) | 100.0 (leader) | 100.0 (leader) | 59.2 (leader) | 10.18s | 2190 | 0 |
+| GPT · gpt-6.1-sol | 93.7 (tied) | 84.9 (behind) | 100.0 (tied) | 37.1 (behind) | 19.74s | 5057 | 0 |
+| Kimi · kimi-k3 | 95.8 (tied) | 100.0 (tied) | 100.0 (tied) | 20.4 (behind) | 32.55s | 1946 | 0 |
 
-Test date: 2026-11-15 17:35:06; task bank: 23; repeats per task: 1; outline review enabled (12 groups); visual layout review enabled (18 groups). Results represent this task bank on this day only.
+Test date: 2026-11-16 11:07:53; task bank: 2026.11-b (28 tasks, 6 hard); repeats per task: 1; outline review enabled (17 groups); visual layout review enabled (21 groups). Results represent this task bank on this day only.
 <!-- END SAMPLE_RESULTS_EN -->
 
 ## Screenshots
@@ -106,6 +106,8 @@ On HTTP 429 responses, SlideArena reads the provider's RPM and concurrency limit
 - Use `-r 3` to repeat tasks and average each task's results.
 - Every score includes a 90% confidence interval computed by bootstrap resampling across cases.
 - Scores within the statistical margin of the leader are marked tied.
+
+Chart tasks mainly screen out models with weaker chart skills and offer limited separation among top models. When every model scores perfectly on these tasks, outline pairwise reviews and visual layout reviews provide most of the distinction.
 
 ### Model Routing
 

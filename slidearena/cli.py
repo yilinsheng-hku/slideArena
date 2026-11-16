@@ -84,6 +84,7 @@ def print_board(r: dict) -> None:
     case_stats = r.get("case_stats", [])
     if case_stats:
         print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")
+        print("注：数据图表类题目对顶级模型区分度有限，三个模型均满分时排版和大纲的两两评审承担主要区分功能。")
 
 
 def cmd_bench(a):

@@ -7,8 +7,9 @@ A number counts as *supported* when it
      percentage-point change.
 Rounding is respected: "41%" matches 41.28..., while "41.3%" must be within 0.05.
 
-Derivations only pair figures listed close together (a time series or a breakdown is written
-consecutively). That keeps random coincidences rare; see tests for measured false-pass rates.
+Verified derivations pair nearby figures or figures with the same explicit unit. Ratios of
+arbitrary numeric derivations are only "unverifiable": they avoid false penalties without
+claiming that distant numbers belong together. See tests for measured false-pass rates.
 It is a heuristic: it can miss some invented numbers, but does not flag correctly derived ones.
 """
 from __future__ import annotations
@@ -143,8 +144,9 @@ class Source:
     def classify(self, x: Qty) -> str:
         """trivial / supported / unverifiable / unsupported.
 
-        "unverifiable": the number matches only a *derived* value and is written so coarsely
-        (e.g. "41%") that a made-up number would match by chance too often to call it supported.
+        "unverifiable": a derived value has coarse precision, needs multiple steps, or is a
+        percentage from potentially unrelated numeric values. A coincidental match does not
+        prove that such a value is supported.
         """
         if is_trivial(x):
             return "trivial"
@@ -157,6 +159,16 @@ class Source:
                 return "supported"
             if _near(self._pool[x.family], v, tol):
                 return "unverifiable" if coarse else "supported"
+        if x.family == "pct":
+            nums = self._pool["num"]
+            for i, hi in enumerate(nums):
+                if hi <= 0:
+                    continue
+                # Search every smaller value, regardless of its position in the material.
+                # The sorted pool avoids enumerating all pairs for each output percentage.
+                j = bisect.bisect_left(nums, (x.norm - x.tol) * hi / 100, 0, i)
+                if j < i and nums[j] / hi * 100 <= x.norm + x.tol:
+                    return "unverifiable"
         for k in scales:
             if _near(self._pool2[x.family], x.norm * k, x.tol * k):
                 return "unverifiable"

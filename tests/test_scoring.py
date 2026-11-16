@@ -41,9 +41,20 @@ SRC = F.Source(C.OUTLINE[0]["material"])
 for t in ["Q2环比增长18.4%", "前三季度累计44.5亿元", "华东占Q3营收41.3%", "毛利率下降2.7个百分点",
           "同比增长31.3%", "71,000万元", "灵犀占Q3营收19.8%", "Q3比Q1多4.7亿"]:
     check(not SRC.unsupported(t), f"正确推算不误报：{t}")
-for t in ["人力成本5.3亿元", "净利润率12.7%", "员工规模1,580人"]:
+for t in ["人力成本5.3亿元", "净利润率12.734567%", "员工规模1,580人"]:
     check(bool(SRC.unsupported(t)), f"编造数字被发现：{t}")
 check(SRC.classify(F.q("41%")) in ("supported", "unverifiable"), "粗精度数字不会被误判为编造")
+far_case = next(c for c in C.OUTLINE if c["id"] == "outline-hard-reconciliation")
+far_source = F.Source(far_case["material"])
+check(far_source.classify(F.q("7.1%")) == "unverifiable" and
+      not far_source.unsupported("研发投入占营收约7.1%"),
+      "相距较远且单位不同的6800万/9.6亿比例标为无法严格核实，不误扣分")
+check(S.faithfulness("研发投入占营收约7.1%", far_case["material"], 30, 12)[0] == 30,
+      "合理的远距离百分比推算保留数字可信满分")
+check(SRC.classify(F.q("12.7%")) in ("unsupported", "unverifiable"),
+      "随机编造的比例不能被标为已核实 supported")
+check(far_source.classify(F.q("54万元")) == "unsupported",
+      "百分比放宽不适用于编造的绝对金额")
 rng = random.Random(3)
 fake = [f"{rng.randint(10, 999) / 10}%" for _ in range(2000)]
 rate = sum(1 for x in fake if SRC.classify(F.q(x)) == "supported") / len(fake)
