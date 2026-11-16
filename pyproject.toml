@@ -29,8 +29,8 @@ classifiers = [
 dependencies = ["python-pptx>=0.6.21", "Pillow"]
 
 [project.urls]
-Homepage = "https://github.com/OWNER/slidearena"
-Issues = "https://github.com/OWNER/slidearena/issues"
+Homepage = "https://github.com/yilinsheng-hku/slidearena"
+Issues = "https://github.com/yilinsheng-hku/slidearena/issues"
 
 [project.optional-dependencies]
 dev = ["ruff", "playwright>=1.40", "PyMuPDF>=1.23"]

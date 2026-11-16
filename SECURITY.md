@@ -12,4 +12,4 @@ The web server binds to `127.0.0.1` and validates request Host and Origin header
 
 ## Private Reports
 
-Please report suspected vulnerabilities privately through GitHub Security Advisories for this repository, if private vulnerability reporting is enabled. The repository URL currently uses the `OWNER` placeholder; contact the maintainer through the repository profile if that feature is unavailable. Do not disclose an unpatched issue in a public issue.
+Please report suspected vulnerabilities privately through GitHub Security Advisories for [yilinsheng-hku/slidearena](https://github.com/yilinsheng-hku/slidearena), if private vulnerability reporting is enabled. Contact the maintainer through the repository owner's profile if that feature is unavailable. Do not disclose an unpatched issue in a public issue.

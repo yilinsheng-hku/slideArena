@@ -54,4 +54,4 @@ Keep changes focused, describe the user-visible behavior, and include the output
    git push origin v0.1.0
    ```
 
-推送 `v*` 标签会触发 `.github/workflows/release.yml`，构建 sdist 和 wheel，发布到 PyPI，并创建附带变更记录和构建产物的 GitHub Release。首次发布前，需要在 PyPI 配置 Trusted Publisher：选择项目包名，仓库填写 GitHub 的 `OWNER/slidearena`，workflow 文件填写 `.github/workflows/release.yml`，environment 名填写 `pypi`（若 PyPI 页面要求环境名，必须与仓库的发布环境完全一致）。Workflow 使用 OIDC，不在仓库或代码中保存 token。
+推送 `v*` 标签会触发 `.github/workflows/release.yml`，构建 sdist 和 wheel，发布到 PyPI，并创建附带变更记录和构建产物的 GitHub Release。首次发布前，需要在 PyPI 配置 Trusted Publisher：选择项目包名，仓库填写 GitHub 的 `yilinsheng-hku/slidearena`，workflow 文件填写 `.github/workflows/release.yml`，environment 名填写 `pypi`（若 PyPI 页面要求环境名，必须与仓库的发布环境完全一致）。Workflow 使用 OIDC，不在仓库或代码中保存 token。
