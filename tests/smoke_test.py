@@ -30,7 +30,7 @@ SEEN = {"openai_auth": None, "anthropic_key": None, "anthropic_version": None}
 
 def _case_for(prompt: str):
     from slidearena import cases as C
-    for bank in (C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
+    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
         for c in bank:
             key = c.get("material") or c.get("desc")
             if key and key in prompt:
@@ -161,9 +161,12 @@ def main():
                                  "model": "fake-judge", "api_key": "env:SA_TEST_KEY"})
     r = benchmark.run([oa["id"], an["id"], bad["id"]], judge_ids=[oa["id"], an["id"], judge["id"]],
                       progress=lambda m: None)
-    check(r["bank_version"] == "2026.11-b" and r["question_count"] == 29 and
+    revise_records = [record for record in r["records"] if record.get("kind") == "revise"]
+    revise_tasks = {record.get("task") for record in revise_records}
+    check(r["bank_version"] == "2026.11-c" and r["question_count"] == 31 and
+          revise_tasks == {"revise-review", "revise-pitch"} and
           isinstance(r["case_stats"], list) and all("range" in item and "stdev" in item for item in r["case_stats"]),
-          "benchmark 结果包含题库版本和逐题区分度")
+          f"benchmark 结果包含题库版本、两道大纲改错题和逐题区分度（题数 {r['question_count']}，改错题 {sorted(revise_tasks)}）")
     s = r["scores"]
     d_oa = s[oa["id"]]["dims"]
     check(all(d_oa[k]["score"] == 100 for k in ("text", "chart", "layout")),

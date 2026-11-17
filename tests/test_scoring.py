@@ -36,6 +36,19 @@ def check(cond, msg):
 for cid, s in benchmark.selftest():
     check(s == 100, f"参考答案满分：{cid}（{s}）")
 
+revise_cases = {case["id"]: case for case in C.REVISE}
+for revise_case in C.REVISE:
+    score, _, _ = S.score_revise(revise_case["reference"], revise_case)
+    check(score == 100, f"大纲改错参考答案满分：{revise_case['id']}（{score}）")
+    flawed_score = S.score_revise(revise_case["flawed"], revise_case)[0]
+    check(flawed_score <= 40, f"未修正错误的大纲得分不超过 40：{revise_case['id']}（{flawed_score}）")
+
+review_fix_one = copy.deepcopy(revise_cases["revise-review"]["flawed"])
+review_fix_one["slides"][1]["bullets"][0] = review_fix_one["slides"][1]["bullets"][0].replace("18.5", "17.2")
+fix_one_score, fix_one_parts, _ = S.score_revise(review_fix_one, revise_cases["revise-review"])
+check(abs(fix_one_parts["错误修正"] - 50 / 3) < 0.1,
+      f"只修正错误 1 时获得约 50/3 修正分（{fix_one_parts['错误修正']}，总分 {fix_one_score}）")
+
 # ---------------------------------------------------------------- 2. fact checking
 SRC = F.Source(C.OUTLINE[0]["material"])
 for t in ["Q2环比增长18.4%", "前三季度累计44.5亿元", "华东占Q3营收41.3%", "毛利率下降2.7个百分点",
@@ -93,9 +106,30 @@ check(S.score_chart({"chart_type": "line", "categories": ["2024", "2025", "2026"
 check(S.score_chart({"chart_type": "column", "categories": ["上半年"], "series": [{"values": [80]}]},
                     ch["chart-nodata"])[0] == 0, "资料里没数据却画图，0 分")
 check(S.score_chart({"chart_type": "column", "categories": ["Q1（实际）", "Q2", "Q3", "Q4（预计）"],
-                     "series": [{"values": [12.5, 14.8, 17.2, 19.6]}]}, ch["chart-quarter"])[0] == 100, "标签里的括号说明不扣分")
+                     "series": [{"values": [12.5, 14.8, 17.2, 19.6]}],
+                     "takeaway": ch["chart-quarter"]["reference"]["takeaway"]}, ch["chart-quarter"])[0] == 100,
+      "标签里的括号说明不扣分")
 check(S.score_chart({"chart_type": "bar", "categories": ["华东区", "华南区", "华北区", "西部地区"],
-                     "series": [{"values": [7.1, 3.2, 2.85, 1.9]}]}, ch["chart-units"])[0] == 100, "“华东区”与“华东”视为同一分类")
+                     "series": [{"values": [7.1, 3.2, 2.85, 1.9]}],
+                     "takeaway": ch["chart-units"]["reference"]["takeaway"]}, ch["chart-units"])[0] == 100,
+      "“华东区”与“华东”视为同一分类")
+
+for chart_case in C.CHART:
+    if not chart_case.get("skip"):
+        take_score, _ = S._check_takeaway(chart_case["reference"].get("takeaway"),
+                                          [series["values"] for series in chart_case["reference"]["series"]],
+                                          chart_case["reference"].get("unit", ""))
+        check(take_score == 10, f"正确图表结论得 10 分：{chart_case['id']}")
+
+trend_case = {"values": [20, 15, 10], "categories": ["Q1", "错项", "Q3"], "good_types": ["line"]}
+trend_answer = {"chart_type": "line", "categories": ["Q1", "Q2", "Q3"],
+                "series": [{"values": [20, 15, 10]}], "takeaway": "营收持续增长"}
+trend_score, _, trend_notes = S.score_chart(trend_answer, trend_case)
+check(S._check_takeaway("营收持续增长", [[20, 15, 10]], "")[0] == 5 and trend_score < 90
+      and any("整体下降" in note for note in trend_notes), "下降数据却称持续增长，结论趋势分为 0")
+unsupported_take, _ = S._check_takeaway("Q3营收17.2亿", [[12.5, 14.8, 16.9]], "亿元")
+check(unsupported_take <= 5, "结论编造图表中不存在的数字，数字依据分为 0")
+check(S._check_takeaway("", [[12.5, 14.8, 16.9]], "亿元")[0] == 0, "空 takeaway 的结论准确分为 0")
 
 lc = {c["id"]: c for c in C.LAYOUT}
 
@@ -195,7 +229,8 @@ check(S.score_chart({"chart_type": "column", "categories": ["7月", "8月", "9�
                      "series": [{"values": [6.3, 6.9, 6.1, 7.4, 8.0, 8.8]}]}, ch["chart-filter"])[0] < 100,
       "混入 12 月预测，扣分")
 check(S.score_chart({"chart_type": "column", "categories": ["2026年7月", "8月", "9月", "10月", "11月"],
-                     "series": [{"values": [6.3, 6.9, 6.1, 7.4, 8.0]}]}, ch["chart-filter"])[0] == 100,
+                     "series": [{"values": [6.3, 6.9, 6.1, 7.4, 8.0]}],
+                     "takeaway": ch["chart-filter"]["reference"]["takeaway"]}, ch["chart-filter"])[0] == 100,
       "“2026年7月”和“7月”视为同一分类")
 check(S.score_chart({"chart_type": "column", "categories": ["Q1", "Q2", "Q3"],
                      "series": [{"values": [12.5, 14.0, 17.2]}]}, ch["chart-partial"])[0] == 0,

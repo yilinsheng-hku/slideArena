@@ -53,7 +53,7 @@ Test date: 2026-11-16 11:07:53; task bank: 2026.11-b (28 tasks, 6 hard); repeats
 
 ## What It Tests
 
-The bank currently has 29 tasks, including 6 marked hard, each with a human-checked reference answer. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
+The bank currently has 31 tasks, including 6 marked hard, each with a human-checked reference answer. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
 
 | Dimension | Tasks | What they test |
 |---|---|---|
@@ -63,7 +63,7 @@ The bank currently has 29 tasks, including 6 marked hard, each with a human-chec
 | Images | Generate one cover image, for image-capable endpoints | Whether image generation succeeds |
 | Speed | Median latency across text calls | Logarithmic score: 100 at 3 seconds or less, 0 at 60 seconds or more; each doubling costs the same number of points |
 
-Scores are split into parts so reports can show where points were lost. For example, chart scoring separates values (60), categories (20), chart type (10), and extra data (10).
+The new outline-revision tasks ask models to correct wrong figures, overlong titles or bullets, and incorrect slide counts. Error correction is worth 50 points, with the rest awarded for format, factual support, and required information. Scores are split into parts so reports can show where points were lost. For example, chart scoring separates values (55), categories (20), chart type (10), extra data (5), and takeaway accuracy (10).
 
 ### Number Checking
 
@@ -118,7 +118,7 @@ For each kind of work, routing first keeps models statistically tied with the le
 - Image tests check whether generation succeeds; they do not assess image quality.
 - Layout screenshots use a simplified renderer and do not represent PowerPoint's actual rendering.
 - Review models can have preferences. Reversed prompts and a third-party judge reduce position and self-review bias but cannot eliminate subjectivity.
-- The task bank currently has 29 tasks, including 6 hard tasks with unit traps, two-step calculations, multi-series charts, strict word limits, and tight layouts; it is still focused mainly on Chinese business scenarios.
+- The task bank currently has 31 tasks, including 6 hard tasks with unit traps, two-step calculations, multi-series charts, strict word limits, and tight layouts, plus 2 outline-revision tasks; it is still focused mainly on Chinese business scenarios.
 
 ## Privacy
 

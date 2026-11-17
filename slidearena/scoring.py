@@ -103,6 +103,67 @@ def score_outline(data, case) -> tuple[float, dict, list[str]]:
     return round(sum(parts.values()), 1), parts, notes
 
 
+def score_revise(data, case) -> tuple[float, dict, list[str]]:
+    slides = data.get("slides") if isinstance(data, dict) else None
+    if not isinstance(slides, list) or not slides or not all(isinstance(s, dict) for s in slides):
+        return 0.0, {}, ["没有合法的 slides 数组"]
+
+    text = _all_text(data)
+    context = {
+        "text": text,
+        "slides": slides,
+        "titles_within_16": all(len(str(s.get("title", ""))) <= 16 for s in slides),
+        "bullets_within_28": all(_len(b) <= 28 for s in slides for b in (s.get("bullets") or [])),
+    }
+    notes = []
+    errors = case.get("errors", [])
+    error_points = 50.0 / max(1, len(errors))
+    p_errors = 0.0
+    for error in errors:
+        removed_check = error.get("check_removed")
+        fixed_check = error.get("check_fixed")
+        removed = removed_check(context) if callable(removed_check) else None
+        fixed = fixed_check(context) if callable(fixed_check) else False
+        if fixed and (removed is None or removed):
+            p_errors += error_points
+        elif removed:
+            p_errors += error_points / 2
+            notes.append(f"部分修正：{error['desc']}")
+        else:
+            notes.append(f"未修正：{error['desc']}")
+
+    n = case["n"]
+    f_count = 7.0 if len(slides) == n else max(0.0, 7.0 - 3.5 * abs(len(slides) - n))
+    if len(slides) != n:
+        notes.append(f"页数 {len(slides)}，要求 {n}")
+    long_titles = sum(1 for slide in slides if _len(slide.get("title", "")) > 16)
+    f_title = 5 * (1 - long_titles / len(slides))
+    if long_titles:
+        notes.append(f"{long_titles} 个标题超过 16 字")
+    body = slides[1:]
+    bad_counts = sum(1 for slide in body if not 3 <= len(slide.get("bullets") or []) <= 5)
+    f_bcount = 4 * (1 - bad_counts / max(1, len(body)))
+    if bad_counts:
+        notes.append(f"{bad_counts} 页要点数量不在 3-5 条")
+    bullets = [bullet for slide in slides for bullet in (slide.get("bullets") or [])]
+    long_bullets = sum(1 for bullet in bullets if _len(bullet) > 28)
+    f_blen = 4 * (1 - long_bullets / max(1, len(bullets)))
+    if long_bullets:
+        notes.append(f"{long_bullets} 条要点超过 28 字")
+    p_format = f_count + f_title + f_bcount + f_blen
+
+    p_faith, unsupported, _ = faithfulness(text, case["material"], 20, 10)
+    if unsupported:
+        notes.append("资料里没有依据的数字：" + "、".join(unsupported[:6]))
+    cov, missing = coverage(text, case["must_numbers"], case["must_terms"])
+    if missing:
+        notes.append("漏掉关键信息：" + "、".join(missing))
+
+    parts = {"错误修正": round(p_errors, 1), "格式": round(p_format, 1),
+             "数字可信": round(p_faith, 1), "关键信息保留": round(10 * cov, 1)}
+    return round(sum(parts.values()), 1), parts, notes
+
+
 # --------------------------------------------------------------------------- condense
 def score_condense(data, case) -> tuple[float, dict, list[str]]:
     if not isinstance(data, dict) or not isinstance(data.get("bullets"), list) or not data["bullets"]:
@@ -145,6 +206,44 @@ def norm_cat(c) -> str:
     return _CAT_SUFFIX.sub("", s)
 
 
+_UP_TRENDS = ("增长", "上升", "提升", "增加", "攀升")
+_DOWN_TRENDS = ("下降", "下滑", "减少", "降低", "下跌")
+
+
+def _check_takeaway(takeaway, vals, unit) -> tuple[float, list[str]]:
+    """Score numeric support and direction consistency for a chart conclusion."""
+    takeaway = str(takeaway or "").strip()
+    if not takeaway:
+        return 0.0, ["缺少图表结论"]
+
+    notes = []
+    series = vals if vals and isinstance(vals[0], (list, tuple)) else [vals]
+    source_text = "  ".join(str(v) for values in series for v in values) + " " + str(unit or "")
+    unsupported = facts.Source(source_text).unsupported(takeaway)
+    numeric_score = 5.0
+    if unsupported:
+        numeric_score = 0.0
+        notes.append("结论里的数字找不到依据：" + "、".join(unsupported))
+
+    changes = []
+    if len(series) > 1:
+        first, last = series[0], series[-1]
+        changes = [float(after) - float(before) for before, after in zip(first, last)]
+    elif series and len(series[0]) >= 2:
+        changes = [float(series[0][-1]) - float(series[0][0])]
+
+    trend_score = 5.0
+    has_up = any(word in takeaway for word in _UP_TRENDS)
+    has_down = any(word in takeaway for word in _DOWN_TRENDS)
+    if len(changes) and has_up and all(change < 0 for change in changes):
+        trend_score = 0.0
+        notes.append("结论称数据增长，但数据整体下降")
+    elif len(changes) and has_down and all(change > 0 for change in changes):
+        trend_score = 0.0
+        notes.append("结论称数据下降，但数据整体上升")
+    return numeric_score + trend_score, notes
+
+
 def score_chart(data, case) -> tuple[float, dict, list[str]]:
     if not isinstance(data, dict):
         return 0.0, {}, ["不是 JSON 对象"]
@@ -167,7 +266,7 @@ def score_chart(data, case) -> tuple[float, dict, list[str]]:
     for got, want in zip(vals_by_series, want_by_series):
         right += sum(1 for i, expected in enumerate(want)
                      if i < len(got) and abs(got[i] - expected) <= max(tol_abs, 0.006 * abs(expected)))
-    p_vals = 60 * right / max(1, total_values)
+    p_vals = 55 * right / max(1, total_values)
     if right < total_values:
         notes.append(f"{total_values - right}/{total_values} 个数值不对（应为 {want_by_series}，给出 {vals_by_series}）")
     cats = [norm_cat(c) for c in (data.get("categories") or [])]
@@ -183,10 +282,13 @@ def score_chart(data, case) -> tuple[float, dict, list[str]]:
     clean = len(series) == len(want_by_series) and all(
         len(got) == len(want) == len(want_c) for got, want in zip(vals_by_series, want_by_series)
     ) and len(cats) == len(want_c)
-    p_clean = 10.0 if clean else 0.0
+    p_clean = 5.0 if clean else 0.0
     if not clean:
         notes.append("混入了无关数据或多余系列")
-    parts = {"数值": round(p_vals, 1), "分类": round(p_cats, 1), "类型": p_type, "无多余数据": p_clean}
+    p_take, take_notes = _check_takeaway(data.get("takeaway", ""), vals_by_series, data.get("unit", ""))
+    notes.extend(take_notes)
+    parts = {"数值": round(p_vals, 1), "分类": round(p_cats, 1), "类型": p_type,
+             "无多余数据": p_clean, "结论准确": round(p_take, 1)}
     return round(sum(parts.values()), 1), parts, notes
 
 

@@ -301,7 +301,7 @@ def _rng(model: dict, prompt: str) -> random.Random:
 def _mock_case(prompt: str):
     """Find which benchmark case a prompt belongs to (demo models answer from the reference)."""
     from . import cases as C
-    for bank in (C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
+    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
         for c in bank:
             key = c.get("material") or c.get("desc")
             if key and key in prompt:
@@ -323,6 +323,8 @@ def _mock_chat(model: dict, prompt: str, system: str, t0: float) -> Reply:
 
     if task == "ping":
         out = "pong"
+    elif task == "revise" and case:
+        out = json.dumps(copy.deepcopy(case["reference"]), ensure_ascii=False)
     elif task in ("outline", "condense") and case:
         ans = copy.deepcopy(case["reference"])
         slides = ans["slides"] if task == "outline" else [ans]

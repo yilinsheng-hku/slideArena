@@ -13,8 +13,10 @@ Cases are deliberately harder than "copy these numbers":
 """
 from __future__ import annotations
 
+import copy
+
 SLIDE_W, SLIDE_H, MARGIN = 13.333, 7.5, 0.4
-BANK_VERSION = "2026.11-b"
+BANK_VERSION = "2026.11-c"
 
 # --------------------------------------------------------------------------- outline (text)
 OUTLINE = [
@@ -459,6 +461,96 @@ IMAGE = [
     {"id": "image-cover", "prompt": "简洁的科技感 PPT 封面插画，蓝色调，抽象的数据流线条，没有文字，16:9"},
 ]
 
+
+def _revise_wrong_number_removed(ctx):
+    return "18.5" not in ctx["text"]
+
+
+def _revise_wrong_number_fixed(ctx):
+    return "17.2" in ctx["text"]
+
+
+def _revise_long_title_fixed(ctx):
+    return ctx["titles_within_16"]
+
+
+def _revise_fabrication_removed(ctx):
+    return "5个城市" not in ctx["text"] and "5 个城市" not in ctx["text"]
+
+
+def _revise_fabrication_fixed(ctx):
+    return "2个城市" in ctx["text"] or "2 个城市" in ctx["text"]
+
+
+def _revise_slide_count_fixed(ctx):
+    return len(ctx["slides"]) == 8
+
+
+def _revise_pitch_number_removed(ctx):
+    return "43万" not in ctx["text"] and "43 万" not in ctx["text"]
+
+
+def _revise_pitch_number_fixed(ctx):
+    return "42万" in ctx["text"] or "42 万" in ctx["text"]
+
+
+def _revise_long_bullet_fixed(ctx):
+    return ctx["bullets_within_28"]
+
+
+_REVIEW_REFERENCE = next(c["reference"] for c in OUTLINE if c["id"] == "outline-review")
+_PITCH_REFERENCE = next(c["reference"] for c in OUTLINE if c["id"] == "outline-pitch")
+_REVIEW_FLAWED = copy.deepcopy(_REVIEW_REFERENCE)
+_REVIEW_FLAWED["slides"][1]["bullets"][0] = "Q3营收18.5亿元，环比增长16.2%"
+_REVIEW_FLAWED["slides"][2]["title"] = "华东是本季度最重要的营收来源区域分析"
+_REVIEW_FLAWED["slides"][5]["bullets"].append("华南新增5个城市办事处")
+_PITCH_FLAWED = copy.deepcopy(_PITCH_REFERENCE)
+_PITCH_FLAWED["slides"][3]["bullets"][0] = "注册用户43万"
+_PITCH_FLAWED["slides"][6]["bullets"][0] = "本轮计划在天使轮融资人民币三千万元以支撑研发和市场推广方向投入"
+_PITCH_FLAWED["slides"].insert(7, {"title": "补充说明", "bullets": ["详见附件"], "kind": "bullets"})
+
+REVISE = [
+    {
+        "id": "revise-review",
+        "brief": "给公司管理层做一份《2026年第三季度经营复盘》，听众是 CEO 和各部门负责人。",
+        "material": next(c["material"] for c in OUTLINE if c["id"] == "outline-review"),
+        "n": 6,
+        "flawed": _REVIEW_FLAWED,
+        "errors": [
+            {"id": "wrong_number", "desc": "营收数字 18.5 亿应改为 17.2 亿",
+             "check_removed": _revise_wrong_number_removed, "check_fixed": _revise_wrong_number_fixed},
+            {"id": "long_title", "desc": "某页标题超过 16 字，应改短",
+             "check_fixed": _revise_long_title_fixed},
+            {"id": "fabrication", "desc": "5个城市办事处是编造的，资料只说新增2个",
+             "check_removed": _revise_fabrication_removed, "check_fixed": _revise_fabrication_fixed},
+        ],
+        "must_numbers": ["17.2亿", "38.5%", "4.6亿", "3.4亿", "19亿"],
+        "must_terms": ["华东", "人力成本", "灵犀"],
+        "check_numbers": True,
+        "reference": copy.deepcopy(_REVIEW_REFERENCE),
+    },
+    {
+        "id": "revise-pitch",
+        "brief": "给天使投资人做一份融资路演 PPT，时间 10 分钟。",
+        "material": next(c["material"] for c in OUTLINE if c["id"] == "outline-pitch"),
+        "n": 8,
+        "flawed": _PITCH_FLAWED,
+        "errors": [
+            {"id": "wrong_slide_count", "desc": "共9页，应为8页",
+             "check_fixed": _revise_slide_count_fixed},
+            {"id": "wrong_number", "desc": "注册用户 43 万应改为 42 万",
+             "check_removed": _revise_pitch_number_removed, "check_fixed": _revise_pitch_number_fixed},
+            {"id": "long_bullet", "desc": "某条要点超过 28 字，应改短",
+             "check_fixed": _revise_long_bullet_fixed},
+        ],
+        "must_numbers": ["42万", "15.6万", "3.8%", "3000万"],
+        "must_terms": ["课记", "竞品", "研发"],
+        "check_numbers": True,
+        "reference": copy.deepcopy(_PITCH_REFERENCE),
+    },
+]
+
+
 # --------------------------------------------------------------------------- prompts
 SYS = "你是一名专业的演示文稿设计师。只输出 JSON，不要输出任何解释。"
 
@@ -474,6 +566,18 @@ OUTLINE_PROMPT = """[task:outline]
 - 推算数字保留的小数位数不能多于原始资料，禁止输出多余精度（例如 17.2 × 38.5% 应写 6.6 亿元，不写 6.622 亿元）；
 - 不要在要点中写算式、乘除等号或“测算口径”说明；每条要点都要是一句完整、通顺的话；
 - kind 从 cover / bullets / chart / image / quote 中选一个，表示这页最适合的形式。
+输出格式：{{"slides": [{{"title": "...", "bullets": ["..."], "kind": "bullets"}}]}}"""
+
+REVISE_PROMPT = """[task:revise]
+下面这份大纲有若干问题，请找出并修正，输出修正后的完整大纲。
+需求：{brief}
+资料：{material}
+要求：共 {n} 页，每页标题不超过 16 字，除封面外每页 3–5 条要点，每条不超过 28 字，所有数字必须来自资料或可由资料数字直接算出。
+只改有问题的部分，不要改动正确的内容。
+
+有问题的大纲：
+{flawed_json}
+
 输出格式：{{"slides": [{{"title": "...", "bullets": ["..."], "kind": "bullets"}}]}}"""
 
 CONDENSE_PROMPT = """[task:condense]
@@ -492,6 +596,7 @@ CHART_PROMPT = """[task:chart]
 - 只放与要求相关的数据，不要放无关的数字；
 - 需要计算的请算准确，保留 1 位小数；
 - 推算结果的小数位数不能多于原始数据；不要把计算过程、×、÷、= 或“测算口径”写进图表标题、结论或标签；
+- takeaway 必须是一句简短结论；其中的数字必须能在图表数据中找到或由图表数据直接推算，增长/下降等方向必须与数据一致；
 - 如果资料里没有足够的数据画这张图，只输出 {{"skip": true}}，不要编造。
 chart_type 从 bar / column / line / pie / doughnut 中选。
 输出格式：{{"chart_type": "column", "title": "...", "unit": "...", "categories": ["..."], "series": [{{"name": "...", "values": [1.0]}}], "takeaway": "一句话结论"}}"""

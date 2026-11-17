@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import itertools
+import json
 import random
 import statistics
 import time
@@ -35,7 +36,7 @@ from . import config, llm, render, scoring, stats
 
 DIMENSIONS = {"text": "文字 / 大纲", "layout": "排版", "chart": "数据图表", "image": "配图", "speed": "速度"}
 QUALITY_DIMS = ("text", "layout", "chart")
-ALL_CASES = [c for bank in (C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT, C.IMAGE) for c in bank]
+ALL_CASES = [c for bank in (C.OUTLINE, C.REVISE, C.CONDENSE, C.CHART, C.LAYOUT, C.IMAGE) for c in bank]
 
 # kept for deck.py and older callers
 SYS = C.SYS
@@ -45,6 +46,7 @@ OUTLINE_PROMPT = C.OUTLINE_PROMPT
 def task_list(model: dict) -> list[tuple[str, str, dict]]:
     """(dimension, kind, case) for one model."""
     jobs = [("text", "outline", c) for c in C.OUTLINE]
+    jobs += [("text", "revise", c) for c in C.REVISE]
     jobs += [("text", "condense", c) for c in C.CONDENSE]
     jobs += [("chart", "chart", c) for c in C.CHART]
     jobs += [("layout", "layout", c) for c in C.LAYOUT]
@@ -56,6 +58,9 @@ def task_list(model: dict) -> list[tuple[str, str, dict]]:
 def build_prompt(kind: str, case: dict) -> str:
     if kind == "outline":
         return C.OUTLINE_PROMPT.format(n=case["n"], brief=C.outline_brief(case))
+    if kind == "revise":
+        return C.REVISE_PROMPT.format(n=case["n"], brief=case["brief"], material=case["material"],
+                                      flawed_json=json.dumps(case["flawed"], ensure_ascii=False))
     if kind == "condense":
         return C.CONDENSE_PROMPT.format(material=case["material"], max_bullets=case["max_bullets"],
                                         max_len=case["max_len"])
@@ -77,7 +82,7 @@ def _truncated(reply) -> bool:
         return raw.get("stop_reason") == "max_tokens"
 
 
-SCORERS = {"outline": scoring.score_outline, "condense": scoring.score_condense,
+SCORERS = {"outline": scoring.score_outline, "revise": scoring.score_revise, "condense": scoring.score_condense,
            "chart": scoring.score_chart, "layout": scoring.score_layout}
 
 
@@ -107,7 +112,7 @@ def _run_one(model: dict, dim: str, kind: str, case: dict, rep: int) -> dict:
                 raise llm.ModelError(f"输出达到 {MAX_TOKENS} token 上限被截断（多为思考过长），没有给出完整答案") from None
             raise
         rec["score"], rec["parts"], rec["notes"] = SCORERS[kind](data, case)
-        if kind in ("outline", "layout"):
+        if kind in ("outline", "revise", "layout"):
             rec["parsed"] = data
     except llm.RateLimited as e:
         # the account's rate limit, not the model's ability: leave this call out of the score
@@ -410,7 +415,8 @@ def ping(model: dict) -> dict:
 def selftest() -> list[tuple[str, float]]:
     """Score every reference answer. All must be 100, otherwise the scorer is wrong."""
     out = []
-    for kind, bank in (("outline", C.OUTLINE), ("condense", C.CONDENSE), ("chart", C.CHART), ("layout", C.LAYOUT)):
+    for kind, bank in (("outline", C.OUTLINE), ("revise", C.REVISE), ("condense", C.CONDENSE),
+                       ("chart", C.CHART), ("layout", C.LAYOUT)):
         for case in bank:
             out.append((case["id"], SCORERS[kind](case["reference"], case)[0]))
     return out
