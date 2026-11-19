@@ -81,7 +81,20 @@ Reasoning models may spend output tokens before writing their answer, so each ta
 
 ### Pairwise Review
 
-Rules can check formats and numbers, but not which outline tells a better story. With three or more models, a third model compares two outlines. With only two, review is skipped so a model never judges itself. The reviewer sees both A/B orders; only matching verdicts count as a win, while inconsistent verdicts are ties. Bradley–Terry scores summarize the results, which contribute 25% of the outline score without changing the overall average.
+Rules can check formats and numbers, but not which outline tells a better story. A reviewer model compares two outlines; who reviews depends on how many models take part (see below). The reviewer sees both A/B orders; only matching verdicts count as a win, while inconsistent verdicts are ties. Bradley–Terry scores summarize the results, which contribute 25% of the outline score without changing the overall average.
+
+### Any Number of Models
+
+You do not need a fixed number of models. The review method adapts to how many take part:
+
+| Models | Pairwise review |
+|---|---|
+| 1 | Nothing to compare: rule scores only. The leaderboard shows absolute scores (reference answer = 100) and no "leader". |
+| 2 | With no third model, the two **review each other**. Each asks both A/B orders; a win counts only when both agree, otherwise it is a tie. A self-serving vote can only produce a tie, so the winner needs the loser to concede. |
+| 3 or more | Each pair is reviewed by a model outside it, so no model judges itself. Reviews go to the least-loaded judge first. |
+| 5 or more | Each task compares one **balanced round** of pairs (every model 1–2 times), rotating across tasks so the bank covers every pair. Each model's review cost stays flat as the number of models grows. |
+
+Before a run, every model's connection is checked in parallel. Unreachable models are left out and listed on the leaderboard, so one wrong key does not slow down the whole run. The web app shows the planned calls and review method as you pick models; `slidearena bench` prints the same plan first.
 
 ### Layout Screenshot Review
 

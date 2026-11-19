@@ -267,6 +267,30 @@ row = benchmark.summarize(recs, [{"id": "m"}])["m"]
 check(row["dims"]["chart"]["score"] == 100 and row["skipped"] == 1 and row["errors"] == 0,
       "限流跳过的题不计 0 分，也不算模型失败")
 
+# ---------------------------------------------------------------- 4b. any number of models
+import itertools as _it  # noqa: E402
+from collections import Counter  # noqa: E402
+
+check(benchmark.schedule_pairs(["a"]) == [] and benchmark.schedule_pairs([]) == [], "1 个模型：没有可比的配对")
+check(benchmark.schedule_pairs(["a", "b"]) == [("a", "b")], "2 个模型：唯一一组")
+check(len(benchmark.schedule_pairs(list("abcd"))) == 6, "4 个以内：全部组合都比")
+for n in (5, 6, 9, 12):
+    ids = [f"m{i}" for i in range(n)]
+    balanced, covered = True, set()
+    for case_index in range(n):
+        pairs = benchmark.schedule_pairs(ids, case_index)
+        counts = Counter(x for pr in pairs for x in pr)
+        balanced &= len(set(counts.values())) == 1 and set(counts) == set(ids)
+        covered |= set(pairs)
+    check(balanced and covered == set(_it.combinations(sorted(ids), 2)),
+          f"{n} 个模型：每道题每个模型比较次数相同，轮换后覆盖全部 {n * (n - 1) // 2} 组")
+check(benchmark.judging_mode(["a"], ["a"]) == "none", "1 个模型：只按规则评分")
+check(benchmark.judging_mode(["a", "b"], ["a", "b"]) == "mutual", "2 个模型、没有裁判：双方互评")
+check(benchmark.judging_mode(["a", "b"], ["a", "b", "j"]) == "third_party", "2 个模型 + 外部裁判：第三方评审")
+check(benchmark.judging_mode(list("abc"), list("abc")) == "third_party", "3 个模型：互相当第三方裁判")
+one = benchmark.summarize([{**recs[0], "dimension": "text", "kind": "outline"}], [{"id": "m"}])["m"]
+check(one["dims"]["text"]["rank"] == "only", "单个模型不标\"第一\"")
+
 # ---------------------------------------------------------------- 5. speed is log scale
 check(S.speed_score([3]) == 100 and S.speed_score([60]) == 0, "速度：3 秒满分，60 秒 0 分")
 check(abs((S.speed_score([6]) - S.speed_score([12])) - (S.speed_score([12]) - S.speed_score([24]))) < 0.5,

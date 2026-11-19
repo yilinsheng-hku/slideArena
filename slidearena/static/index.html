@@ -71,6 +71,7 @@
     <div class="row" style="margin-top:14px">
       <button class="btn primary" id="add">保存模型</button>
       <button class="btn" id="demo">没有 Key？先加 3 个演示模型</button>
+      <button class="btn" id="quick-bench">一键测试全部模型</button>
       <span id="add-msg" class="hint" style="margin:0"></span>
     </div>
   </div>
@@ -84,7 +85,9 @@
   <div class="card">
     <h2>一键能力测试</h2>
     <p class="hint">题库共 31 道题：写大纲 ×6、大纲改错 ×2、压缩成一页 ×4、从资料做图表 ×11、排版 ×7，并包含配图生成测试。
-      全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。接入 3 个以上模型时，大纲还会由第三方模型<b>两两对比</b>评审（每组正反各问一次，抵消位置偏差），<b>不会自己评自己</b>。</p>
+      全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。<b>接入几个模型都能直接开测</b>：
+      1 个模型只按规则评分；2 个模型时大纲和排版由双方<b>互评</b>（输的一方也认输才算胜，自评偏向只会变成平局）；3 个及以上由第三方模型<b>两两对比</b>评审，不会自己评自己。每组正反各问一次，抵消位置偏差。
+      模型很多时按均衡轮换配对，每个模型的评审开销不随人数增长。连不上的模型会在开测前自动排除。</p>
     <div id="bench-pick" class="row" style="margin-bottom:12px"></div>
     <div class="row" style="margin:0 0 12px">
       <span class="hint" style="margin:0">测试维度</span>
@@ -96,7 +99,8 @@
     </div>
     <div class="row"><button class="btn primary" id="run-bench">开始测试</button>
       <label style="margin:0">每题重复</label><select id="repeats" style="width:80px"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
-      <span class="hint" style="margin:0">每个模型约 14 次调用；重复次数越多，排名越稳</span></div>
+      <span class="hint" style="margin:0">重复次数越多，排名越稳</span></div>
+    <ul id="bench-plan" class="hint" style="margin:10px 0 4px;padding-left:18px"></ul>
     <div id="bench-log" class="log" style="display:none;margin-top:12px"></div>
   </div>
   <div class="card">
@@ -173,6 +177,13 @@ $('#add').onclick = async () => {
   $('#add-msg').textContent = '';
 };
 $('#demo').onclick = async () => { const r = await api('/api/demo', {}); $('#add-msg').textContent = `已添加 ${r.added} 个演示模型`; loadModels(); };
+$('#quick-bench').onclick = async () => {
+  await loadModels();
+  if (!MODELS.length) { $('#add-msg').innerHTML = '<span class="err">请先添加至少 1 个模型</span>'; return; }
+  document.querySelector('nav button[data-tab="bench"]').click();
+  renderPick();
+  $('#run-bench').click();
+};
 async function ping(id) {
   const cell = $('#ping-' + id); if (cell) cell.innerHTML = '<span class="hint">测试中…</span>';
   const r = await api('/api/models/test', {id});
@@ -186,7 +197,21 @@ function renderPick() {
     `<label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--ink);border:1px solid var(--line);padding:6px 10px;border-radius:6px">
        <input type="checkbox" class="pick" value="${m.id}" checked style="width:auto"> ${esc(m.name)}</label>`).join('')
     : '<span class="hint">请先在 ① 接入模型</span>';
+  updatePlan();
 }
+function benchBody() {
+  return {model_ids: [...document.querySelectorAll('.pick:checked')].map(x => x.value), repeats: +$('#repeats').value,
+    dims: [...document.querySelectorAll('.dim-pick:checked')].map(x => x.value), visual: $('#visual-review').checked};
+}
+let planSeq = 0;
+async function updatePlan() {
+  const body = benchBody(), seq = ++planSeq;
+  if (!body.model_ids.length || !body.dims.length) { $('#bench-plan').innerHTML = ''; return; }
+  const r = await api('/api/benchmark/plan', body);
+  if (seq !== planSeq || !r.lines) return;
+  $('#bench-plan').innerHTML = r.lines.map(l => `<li>${esc(l)}</li>`).join('');
+}
+document.addEventListener('change', e => { if (e.target.closest('#bench')) updatePlan(); });
 async function poll(job, logEl, onDone) {
   logEl.style.display = 'block';
   const t = setInterval(async () => {
@@ -196,28 +221,28 @@ async function poll(job, logEl, onDone) {
   }, 600);
 }
 $('#run-bench').onclick = async () => {
-  const ids = [...document.querySelectorAll('.pick:checked')].map(x => x.value);
-  if (!ids.length) return alert('至少选一个模型');
-  const dims = [...document.querySelectorAll('.dim-pick:checked')].map(x => x.value);
-  if (!dims.length) return alert('至少选一个测试维度');
+  const body = benchBody();
+  if (!body.model_ids.length) return alert('至少选一个模型');
+  if (!body.dims.length) return alert('至少选一个测试维度');
   $('#run-bench').disabled = true;
-  const r = await api('/api/benchmark', {model_ids: ids, repeats: +$('#repeats').value,
-    dims, visual: $('#visual-review').checked});
+  const r = await api('/api/benchmark', body);
+  if (r.error) { $('#run-bench').disabled = false; return alert(r.error); }
   poll(r.job, $('#bench-log'), j => { $('#run-bench').disabled = false; if (j.result) drawBoard(j.result); });
 };
 async function loadBoard() { const b = await api('/api/benchmarks/latest'); if (b) drawBoard(b); }
 const DIMS = [['text','文字 / 大纲'],['layout','排版'],['chart','数据图表'],['image','配图'],['speed','速度']];
 function drawBoard(b) {
   if (!b.version) { $('#board').innerHTML = '<div class="empty">这是旧版测试结果，请重新运行一次测试</div>'; return; }
-  const name = id => (b.models.find(m => m.id === id) || {}).name || id;
+  const name = id => id === 'mutual' ? '双方互评' : (b.models.find(m => m.id === id) || {}).name || id;
+  const single = b.models.length === 1;
   const rows = b.models.map(m => ({m, s: b.scores[m.id] || {dims: {}}}));
   rows.forEach(r => { const v = ['text','layout','chart'].map(d => (r.s.dims[d] || {}).score || 0); r.total = v.reduce((a, c) => a + c, 0) / v.length; });
   rows.sort((a, c) => c.total - a.total);
   const cell = (r, d) => {
     const x = r.s.dims[d]; if (!x) return '<td class="hint">—</td>';
-    const tag = x.rank === 'leader' ? '<span class="crown" title="该项第一">👑</span>' : x.rank === 'tied' ? '<span class="tag" title="与第一的差距在统计误差内">并列</span>' : '';
+    const tag = single ? '' : x.rank === 'leader' ? '<span class="crown" title="该项第一">👑</span>' : x.rank === 'tied' ? '<span class="tag" title="与第一的差距在统计误差内">并列</span>' : '';
     const ci = x.lo != null && x.lo !== x.hi ? `<div class="hint" style="margin:2px 0 0;font-size:11px">区间 ${Math.round(x.lo)}–${Math.round(x.hi)}</div>` : '';
-    return `<td><div class="score"><b class="${x.rank === 'leader' ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}</td>`;
+    return `<td><div class="score"><b class="${x.rank === 'leader' && !single ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}</td>`;
   };
   const parts = p => Object.entries(p || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
   const caseStats = Object.fromEntries((b.case_stats || []).map(x => [x.task, x]));
@@ -230,7 +255,9 @@ function drawBoard(b) {
       <td>${esc((p.votes || []).join(' / '))}</td><td>${p.result === 'tie' ? '平局' : esc(p.result === '评审失败' ? '评审失败' : name(p.result))}</td></tr>`).join('')}
     </tbody></table>`;
   $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 题库 ${esc(b.bank_version || '—')} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
-      👑 该项第一 · <span class="tag">并列</span> 与第一的差距在统计误差内 · 区间为 90% 置信区间</p>
+      ${single ? '' : '👑 该项第一 · <span class="tag">并列</span> 与第一的差距在统计误差内 · '}区间为 90% 置信区间</p>
+    ${single ? '<p class="hint">只测了 1 个模型：分数是相对题库的绝对分（参考答案 = 100），没有排名和两两评审。再接入模型即可对比。</p>' : ''}
+    ${(b.excluded || []).length ? `<p class="err" style="font-size:13px">连接失败、未参加本次测试：${b.excluded.map(x => `<span title="${esc(x.error)}">${esc(x.name)}</span>`).join('、')}</p>` : ''}
     ${b.case_stats ? `<p class="hint">共 ${b.question_count || b.case_stats.length} 道题，其中 ${b.case_stats.filter(x => x.saturated).length} 道饱和。</p>` : ''}
     <table><thead><tr><th>模型</th>${DIMS.map(d => `<th>${d[1]}</th>`).join('')}<th>中位耗时</th><th>token/次</th><th>失败</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.m.name)}</b></td>${DIMS.map(([d]) => cell(r, d)).join('')}

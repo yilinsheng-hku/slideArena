@@ -69,27 +69,44 @@ def print_board(r: dict) -> None:
             if not x:
                 cells.append(_pad("-", 16))
                 continue
-            mark = {"leader": "*", "tied": "~", "behind": " "}.get(x.get("rank"), " ")
+            mark = {"leader": "*", "tied": "~", "behind": " ", "only": " "}.get(x.get("rank"), " ")
             ci = f"[{x['lo']:.0f}-{x['hi']:.0f}]" if "lo" in x and x["lo"] != x["hi"] else ""
             cells.append(_pad(f"{mark}{x['score']:.0f} {ci}", 16))
         print(_pad(names[mid], width) + "".join(cells)
               + _pad(f"{row['median_latency'] or '-'}s", 10) + _pad(str(row["tokens_per_call"]), 10) + str(row["errors"])
               + (f"（另有 {row['skipped']} 题因限流未计分）" if row.get("skipped") else ""))
-    print("\n* 该项第一   ~ 与第一的差距在统计误差内（视为并列）   [a-b] 90% 置信区间")
+    for x in r.get("excluded") or []:
+        print(_pad(x["name"], width) + f"连接失败，未参加测试：{x['error'][:80]}")
+    if len(r["scores"]) == 1:
+        print("\n只测了 1 个模型：以上是相对题库的绝对分，没有排名和两两评审。   [a-b] 90% 置信区间")
+    else:
+        print("\n* 该项第一   ~ 与第一的差距在统计误差内（视为并列）   [a-b] 90% 置信区间")
     pw = r.get("pairwise", {})
     if pw.get("judged"):
         by = pw.get("by_dim") or {"text": pw["judged"]}
         parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 组" for d, n in by.items() if n]
-        print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%）")
+        mutual = any(m in ("mutual", "mixed") for m in (pw.get("modes") or {}).values())
+        print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%"
+              f"{'；没有第三方裁判的组由双方互评' if mutual else ''}）")
     case_stats = r.get("case_stats", [])
     if case_stats:
         print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")
-        print("注：数据图表类题目对顶级模型区分度有限，三个模型均满分时排版和大纲的两两评审承担主要区分功能。")
+        print("注：数据图表类题目对顶级模型区分度有限，所有模型均满分时排版和大纲的两两评审承担主要区分功能。")
 
 
 def cmd_bench(a):
     ids = a.models or [m["id"] for m in config.list_models()]
-    r = benchmark.run(ids, repeats=a.repeats, pairwise=not a.no_judge, dims=a.only, visual=not a.no_visual)
+    if not ids:
+        print("还没有模型。运行 slidearena add 或 slidearena demo")
+        return 1
+    opts = dict(repeats=a.repeats, pairwise=not a.no_judge, dims=a.only, visual=not a.no_visual)
+    for line in benchmark.plan(ids, **opts)["lines"]:
+        print("· " + line)
+    try:
+        r = benchmark.run(ids, **opts)
+    except ValueError as e:
+        print(e)
+        return 1
     print_board(r)
     for d in (a.only or ("text", "chart", "layout")):
         if d == "image":

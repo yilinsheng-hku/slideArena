@@ -30,6 +30,7 @@ jobs:
       - run: python -m pip install -e .
       - run: python tests/test_scoring.py
       - run: python tests/smoke_test.py
+      - run: python tests/any_count_test.py
       - run: python -m slidearena selftest
 
   lint:

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- One-click benchmarking now works for any number of models: rule scores only for one model, mutual review (a win needs the loser to agree) for two, third-party review for three or more.
+- Pairwise review uses balanced, rotating pairings and least-loaded judges, so each model's review cost stays flat as the number of models grows.
+- Models that fail a connection check are excluded before the run and listed on the leaderboard.
+- Added a run plan (calls and review method) in the web app, `POST /api/benchmark/plan`, and before `slidearena bench`.
+- Added a "benchmark all models" button on the models page.
+- A single model is no longer marked as the leader, and tasks are not marked saturated with only one model.
+
 ## 0.1.0
 
 - Added a local web app for connecting existing model providers and managing model configurations.

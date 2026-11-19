@@ -172,7 +172,8 @@ def main():
     check(all(d_oa[k]["score"] == 100 for k in ("text", "chart", "layout")),
           f"满分模型经 HTTP 全链路后三项都是 100 分 {[(k, d_oa[k]['score']) for k in ('text', 'chart', 'layout')]}")
     check(d_oa.get("image", {}).get("score") == 100 and "image" not in s[an["id"]]["dims"], "只有可出图模型参与配图测试")
-    check(s[bad["id"]]["errors"] > 0, "连不上的模型记为失败，不影响其他模型")
+    check(bad["id"] not in s and [x["id"] for x in r["excluded"]] == [bad["id"]],
+          "连不上的模型在开测前被排除，不影响其他模型")
     check(all(p["judge"] not in (p["a"], p["b"]) for p in r["pairwise"]["log"]), "两两评审里模型不会评自己")
     by = r["pairwise"].get("by_dim", {})
     check(by.get("text", 0) > 0 and by.get("layout", 0) > 0, f"大纲评审和排版截图评审都完成了 {by}")

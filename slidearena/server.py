@@ -174,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/models/test":
             m = config.get_model(body.get("id", ""))
             return self._json(benchmark.ping(m) if m else {"ok": False, "error": "模型不存在"})
-        if p == "/api/benchmark":
+        if p in ("/api/benchmark", "/api/benchmark/plan"):
             ids = body.get("model_ids") or [m["id"] for m in config.list_models()]
             try:
                 reps = self._number(body, "repeats", 1, 1, 5)
@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
             visual = body.get("visual", True)
             if not isinstance(visual, bool):
                 return self._json({"error": "visual must be a boolean"}, 400)
+            if p == "/api/benchmark/plan":
+                return self._json(benchmark.plan(ids, repeats=reps, dims=dims, visual=visual))
             return self._json({"job": _start_job(
                 "benchmark", lambda pr: benchmark.run(ids, progress=pr, repeats=reps, dims=dims, visual=visual))})
         if p == "/api/deck":
@@ -203,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
                 from urllib.parse import quote
                 r["download"] = "/download/" + quote(Path(r["path"]).name)
                 return r
+            if p == "/api/benchmark/plan":
+                return self._json(benchmark.plan(ids, repeats=reps, dims=dims, visual=visual))
             return self._json({"job": _start_job("deck", make)})
         if p == "/api/demo":
             return self._json({"added": add_demo_models()})
