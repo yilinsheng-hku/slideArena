@@ -29,7 +29,7 @@ PRESETS = [
     {"key": "anthropic", "label": "Anthropic Claude", "protocol": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-5-5", "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "key_prefix": ["sk-ant-"]},
     {"key": "gemini", "label": "Google Gemini (OpenAI 兼容)", "protocol": "openai", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash", "models": ["gemini-2.5-pro", "gemini-2.5-flash"], "key_prefix": ["AIza"]},
     {"key": "deepseek", "label": "DeepSeek", "protocol": "openai", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "models": ["deepseek-chat", "deepseek-reasoner"]},
-    {"key": "moonshot", "label": "Kimi / Moonshot", "protocol": "openai", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-turbo-preview", "models": ["kimi-k2-turbo-preview"]},
+    {"key": "moonshot", "label": "Kimi / Moonshot", "protocol": "openai", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k3.1-pro", "models": ["kimi-k3.1-pro", "kimi-k3"]},
     {"key": "dashscope", "label": "通义千问 DashScope", "protocol": "openai", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "models": ["qwen-plus", "qwen-max"]},
     {"key": "ark", "label": "豆包 火山方舟", "protocol": "openai", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": ""},
     {"key": "zhipu", "label": "智谱 GLM", "protocol": "openai", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.6", "models": ["glm-4.6"]},
@@ -252,6 +252,26 @@ def chat(model: dict, prompt: str, system: str = "", images: list[str] | None = 
     usage = data.get("usage") or {}
     return Reply(text, getattr(_TL, "elapsed", time.time() - t0), usage.get("prompt_tokens", 0),
                  usage.get("completion_tokens", 0), data)
+
+
+def available_models(model: dict, timeout: float = 20) -> list[str]:
+    """Model names this key can use (GET /models), to suggest the right one when a name is wrong.
+    Returns [] when the endpoint does not offer the list."""
+    if model.get("protocol") == "mock":
+        return []
+    base = (model.get("base_url") or "").rstrip("/")
+    key = config.resolve_key(model.get("api_key"))
+    if model.get("protocol") == "anthropic":
+        url = base + ("/models" if base.endswith("/v1") else "/v1/models")
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    else:
+        url, headers = base + "/models", ({"Authorization": f"Bearer {key}"} if key else {})
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return sorted(str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and m.get("id"))
+    except Exception:
+        return []
 
 
 def generate_image(model: dict, prompt: str, size: str = "1536x1024", timeout: float = 180) -> tuple[bytes, float]:

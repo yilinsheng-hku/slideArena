@@ -86,8 +86,27 @@ class Fake(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_GET(self):
+        if self.path.endswith("/models"):
+            data = json.dumps({"data": [{"id": "fake-gpt"}, {"id": "fake-a"}, {"id": "fake-b"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path.endswith("/chat/completions") and body.get("model") == "no-such-model":
+            data = json.dumps({"error": {"message": "The model no-such-model does not exist"}}).encode()
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.endswith("/chat/completions"):
             SEEN["openai_auth"] = self.headers.get("Authorization")
             msg = body["messages"][-1]["content"]
@@ -156,6 +175,9 @@ def main():
                                "model": "x", "api_key": "k"})
 
     p1, p2, p3 = benchmark.ping(oa), benchmark.ping(an), benchmark.ping(bad)
+    wrong = benchmark.ping({**oa, "model": "no-such-model"})
+    check(not wrong["ok"] and wrong.get("available_models") == ["fake-a", "fake-b", "fake-gpt"]
+          and "fake-gpt" in wrong["error"], f"模型名填错时列出这个 Key 可用的模型：{wrong.get('error', '')[:80]}")
     check(p1["ok"] and p1["reply"] == "pong", f"OpenAI 协议连通 {p1}")
     check(p2["ok"] and p2["reply"] == "pong", f"Anthropic 协议连通 {p2}")
     check(not p3["ok"], f"错误地址返回失败而不是崩溃: {p3.get('error', '')[:60]}")

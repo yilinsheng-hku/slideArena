@@ -673,7 +673,14 @@ def ping(model: dict) -> dict:
     except Exception as e:
         err = str(e)[:300]
         hint = explain_error(err)
-        return {"ok": False, "error": f"{hint}（{err[:160]}）" if hint else err}
+        out = {"ok": False, "error": f"{hint}（{err[:160]}）" if hint else err}
+        if hint.startswith("找不到这个模型"):
+            names = llm.available_models(model)
+            if names:
+                out["available_models"] = names[:40]
+                out["error"] = f"找不到模型 {model.get('model')}；这个 Key 可用的有：{'、'.join(names[:12])}" + \
+                    ("等" if len(names) > 12 else "")
+        return out
 
 
 def selftest(seed: str | None = "auto") -> list[tuple[str, float]]:

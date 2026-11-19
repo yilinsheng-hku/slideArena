@@ -249,7 +249,9 @@ $('#save-all').onclick = async () => {
     const good = res.length && res.every(x => x.ok);
     ok += res.filter(x => x.ok).length; bad += res.filter(x => !x.ok).length;
     tr.querySelector('.rowmsg').innerHTML = res.map(x => x.ok ? `<span class="ok">✓ ${esc(x.name || '')} ${x.latency}s</span>`
-      : `<span class="err" title="${esc(x.error)}">✗ ${esc(x.name || '')}：${esc((x.error || '').split('（')[0].slice(0, 60))}</span>`).join('<br>');
+      : (x.available_models ? `<span class="err">✗ ${esc(x.name || '')}：找不到这个模型。这个 Key 可用：</span>${x.available_models.slice(0, 12).map(n =>
+        `<button class="btn" style="padding:1px 6px;font-size:12px;margin:2px" onclick="this.closest('tr').querySelector('.k-model').value='${esc(n)}'">${esc(n)}</button>`).join('')}`
+      : `<span class="err" title="${esc(x.error)}">✗ ${esc(x.name || '')}：${esc((x.error || '').split('（')[0].slice(0, 60))}</span>`)).join('<br>');
     if (good) setTimeout(() => tr.remove(), 2500);   // keep failed rows so they can be fixed
   });
   setTimeout(() => { if (!$('#key-rows').children.length) addRow(); }, 2600);
