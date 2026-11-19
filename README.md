@@ -6,7 +6,7 @@
 
 市面上能做 PPT 的模型和 agent 太多，挨个试既费时间又费额度。SlideArena 帮你把这件事自动化：
 
-1. **接入模型**：填上 API Key 就行，支持 OpenAI、Claude、Gemini、DeepSeek、Kimi、通义、豆包、智谱、硅基流动、OpenRouter、Ollama，以及任何 OpenAI 兼容接口。
+1. **接入模型**：在表格里一次填好多个 Key（也可以整段粘贴，自动识别服务商；同一个 Key 可以同时测多个模型），支持 OpenAI、Claude、Gemini、DeepSeek、Kimi、通义、豆包、智谱、硅基流动、OpenRouter、Ollama，以及任何 OpenAI 兼容接口。
 2. **能力测试**：所有模型做同一套 PPT 题目，自动打分，生成排行榜。
 3. **分工制作**：大纲交给文字最强的模型，图表页交给数据最准的模型，封面图交给画图最好的模型，最后在本地统一主题，导出**可编辑**的 .pptx。
 

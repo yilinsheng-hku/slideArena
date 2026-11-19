@@ -70,6 +70,14 @@ def upsert_model(entry: dict) -> dict:
     return entry
 
 
+def find_model(base_url: str, model: str, protocol: str) -> dict | None:
+    """An existing entry for the same endpoint and model name, so re-entering it updates the key
+    instead of creating a duplicate."""
+    base = (base_url or "").rstrip("/")
+    return next((m for m in list_models() if m.get("protocol") == protocol and m.get("model") == model
+                 and (m.get("base_url") or "").rstrip("/") == base), None)
+
+
 def delete_model(model_id: str) -> bool:
     models = list_models()
     kept = [m for m in models if m["id"] != model_id]

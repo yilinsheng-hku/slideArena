@@ -308,6 +308,22 @@ def main():
     check(layout_result["status"] == "done" and layout_records
           and all(record["dimension"] == "layout" for record in layout_records),
           "网页接口 dims=[layout] 只运行排版题")
+    # batch entry: one key for two models, plus a row that cannot connect, plus an incomplete row
+    before = len(config.list_models())
+    batch = json.loads(http(web + "/api/models/batch", {"models": [
+        {"protocol": "openai", "base_url": base + "/v1", "model": "fake-a, fake-b", "api_key": "env:SA_TEST_KEY",
+         "label": "假服务"},
+        {"protocol": "openai", "base_url": "http://127.0.0.1:1/v1", "model": "x2", "api_key": "k"},
+        {"protocol": "openai", "base_url": base + "/v1", "model": "", "api_key": "k"},
+    ]})[1])["results"]
+    check([r["ok"] for r in batch] == [True, True, False, False] and batch[0]["name"] == "假服务 · fake-a"
+          and batch[3]["error"] == "请填写模型名称" and len(config.list_models()) == before + 3,
+          "批量添加：一个 Key 多个模型、连不上的行报错、缺模型名的行提示，其余照常保存")
+    again = json.loads(http(web + "/api/models/batch", {"models": [
+        {"protocol": "openai", "base_url": base + "/v1/", "model": "fake-a", "api_key": "sk-new-key-0000"}]})[1])["results"]
+    updated = config.get_model(batch[0]["id"])
+    check(again[0]["id"] == batch[0]["id"] and updated["api_key"] == "sk-new-key-0000"
+          and len(config.list_models()) == before + 3, "同一接口和模型再录一次是更换 Key，不会重复添加")
     models = json.loads(http(web + "/api/models")[1])
     check(all("api_key" not in m for m in models) and any(m["api_key_masked"] == "sk-…1234" for m in models),
           "模型列表接口只返回脱敏 Key")

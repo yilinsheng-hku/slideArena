@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New key entry: a table for several providers at once, paste-to-fill with provider detection from key prefixes, several model names per key, a show/hide toggle, per-row connection results with plain-language errors, and re-entering a model updates its key instead of duplicating it (`POST /api/models/batch`).
 - Added 10 generated tasks per run (5 charts, 2 condensations, 3 layouts) with random numbers, names, distractors, and layouts, so the public bank cannot simply be memorised. References are computed in code and checked with the real scorer before use. The default batch changes every ISO week; `--seed` reproduces a batch and `--no-fresh` uses the hand-checked bank only.
 - Judges are calibrated before judging: each must tell a reference answer from a deliberately worse copy in 2 blind controls. Judges that prefer the worse copy or cannot tell them apart are left out, and the leaderboard shows each judge's results and self-consistency.
 - The offline demo judges now use simple real judgement (invented numbers, overflowing text) instead of random votes.

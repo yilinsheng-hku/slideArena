@@ -648,12 +648,32 @@ def _update_profiles(scores: dict) -> None:
     config.save("profiles.json", prof)
 
 
+def explain_error(msg: str) -> str:
+    """Turn a raw connection error into advice a user can act on."""
+    m = msg.lower()
+    if msg.startswith(("HTTP 401", "HTTP 403")) and "agent proxy" not in m or "invalid api key" in m or "authentication" in m:
+        return "Key 无效、已过期或没有这个模型的权限，请检查 Key"
+    if msg.startswith("HTTP 404") or "model_not_found" in m or "does not exist" in m or "no such model" in m:
+        return "找不到这个模型，请检查模型名称和接口地址"
+    if msg.startswith("HTTP 402") or "insufficient" in m or "balance" in m or "quota" in m or "余额" in msg:
+        return "账户余额或额度不足"
+    if "403 forbidden (agent proxy" in m or "tunnel connection failed" in m:
+        return "当前网络不允许访问这个服务商"
+    if "超时" in msg or "timed out" in m or "连接失败" in msg:
+        return "连不上接口地址，请检查网络或 base_url"
+    if "base_url" in msg:
+        return "请填写接口地址 base_url"
+    return ""
+
+
 def ping(model: dict) -> dict:
     try:
         r = llm.chat(model, "[task:ping] 请只回复 pong", max_tokens=20, temperature=0, timeout=30)
         return {"ok": True, "latency": round(r.latency, 2), "reply": r.text[:80]}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+        err = str(e)[:300]
+        hint = explain_error(err)
+        return {"ok": False, "error": f"{hint}（{err[:160]}）" if hint else err}
 
 
 def selftest(seed: str | None = "auto") -> list[tuple[str, float]]:

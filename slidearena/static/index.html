@@ -41,6 +41,9 @@
   details { margin-top:8px; } summary { cursor:pointer; color:var(--muted); font-size:13px; }
   .empty { color:var(--muted); padding:20px 0; text-align:center; }
   .plan li { margin:4px 0; }
+  table.keys td { padding:6px 4px; } table.keys input, table.keys select { padding:7px 8px; font-size:13px; }
+  .keywrap { display:flex; gap:4px; } .keywrap button { border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; padding:0 8px; }
+  .rowmsg { font-size:12px; margin-top:3px; }
 </style>
 </head>
 <body>
@@ -55,21 +58,21 @@
 <section id="models" class="on">
   <div class="card">
     <h2>添加模型</h2>
-    <p class="hint">选一个服务商，填上 API Key 和模型名称即可。Key 只保存在本机（~/.slidearena/models.json）；也可以写成 <code>env:变量名</code>，从环境变量读取。</p>
-    <div class="grid">
-      <div><label>服务商</label><select id="preset"></select></div>
-      <div><label>显示名称</label><input id="m-name" placeholder="例如：DeepSeek V3"></div>
-      <div><label>接口地址 base_url</label><input id="m-base"></div>
-      <div><label>模型名称 model</label><input id="m-model" placeholder="例如：deepseek-chat"></div>
-      <div><label>API Key</label><input id="m-key" type="password" placeholder="sk-... 或 env:DEEPSEEK_API_KEY"></div>
-      <div><label>协议</label><select id="m-proto"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option><option value="mock">演示（离线）</option></select></div>
-      <div class="row" style="grid-column:1/3">
-        <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--ink)"><input type="checkbox" id="m-img" style="width:auto"> 这个接口能生成图片（/images/generations）</label>
-        <input id="m-imgmodel" placeholder="图片模型名称（可选，例如 gpt-image-1）" style="max-width:320px">
-      </div>
+    <p class="hint">每行一个服务商：选服务商，填模型名称和 API Key。<b>同一个 Key 想测多个模型</b>，在模型名称里用逗号隔开即可（例如 <code>deepseek-chat, deepseek-reasoner</code>）。
+      已经加过的模型再填一次就是更换 Key。Key 只保存在本机（~/.slidearena/models.json），也可以写成 <code>env:变量名</code> 从环境变量读取。</p>
+    <table class="keys"><thead><tr><th style="width:19%">服务商</th><th style="width:27%">模型名称（可多个，逗号隔开）</th><th style="width:27%">API Key</th><th>接口地址</th><th title="这个接口能生成图片">出图</th><th></th></tr></thead>
+      <tbody id="key-rows"></tbody></table>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="add-row">＋ 再加一行</button>
+      <button class="btn" id="toggle-paste">一次粘贴多个 Key</button>
+    </div>
+    <div id="paste-box" style="display:none;margin-top:10px">
+      <label>每行一个：<code>服务商 模型名称 Key</code>（顺序不限，空格、逗号或竖线分隔；Key 以 sk-ant- / sk-or- / AIza 开头时可以不写服务商）</label>
+      <textarea id="paste" placeholder="deepseek deepseek-chat sk-xxxx&#10;kimi kimi-k2-turbo-preview sk-yyyy&#10;sk-ant-zzzz claude-sonnet-5-5&#10;openrouter qwen/qwen3-max,openai/gpt-5 sk-or-wwww"></textarea>
+      <div class="row" style="margin-top:6px"><button class="btn" id="parse-paste">识别并填入表格</button><span id="paste-msg" class="hint" style="margin:0"></span></div>
     </div>
     <div class="row" style="margin-top:14px">
-      <button class="btn primary" id="add">保存模型</button>
+      <button class="btn primary" id="save-all">全部保存并测试连接</button>
       <button class="btn" id="demo">没有 Key？先加 3 个演示模型</button>
       <button class="btn" id="quick-bench">一键测试全部模型</button>
       <span id="add-msg" class="hint" style="margin:0"></span>
@@ -144,17 +147,116 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 
 // ---------- models
 let PRESETS = [], MODELS = [];
+const ALIASES = {claude: 'anthropic', kimi: 'moonshot', qwen: 'dashscope', '通义': 'dashscope', glm: 'zhipu', '智谱': 'zhipu',
+  '豆包': 'ark', doubao: 'ark', '硅基': 'siliconflow', gpt: 'openai', google: 'gemini'};
 async function init() {
-  PRESETS = await api('/api/presets');
-  $('#preset').innerHTML = PRESETS.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('');
-  $('#preset').onchange = applyPreset; applyPreset();
+  PRESETS = (await api('/api/presets')).filter(p => p.key !== 'mock');
+  document.body.insertAdjacentHTML('beforeend', PRESETS.map(p =>
+    `<datalist id="dl-${p.key}">${(p.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>`).join(''));
+  addRow();
   await loadModels();
 }
-function applyPreset() {
-  const p = PRESETS[$('#preset').value];
-  $('#m-base').value = p.base_url; $('#m-model').value = p.model; $('#m-proto').value = p.protocol;
-  $('#m-name').value = p.key === 'custom' ? '' : p.label.replace(/（.*?）|\(.*?\)/g, '').trim() + (p.model ? ' · ' + p.model : '');
+const presetBy = key => PRESETS.find(p => p.key === key);
+function addRow(v = {}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><select class="k-preset"><option value="">请选择服务商</option>${PRESETS.map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('')}</select></td>
+    <td><input class="k-model" placeholder="例如 deepseek-chat"></td>
+    <td><div class="keywrap"><input class="k-key" type="password" autocomplete="off" placeholder="sk-... 或 env:变量名"><button type="button" class="k-eye" title="显示 / 隐藏">👁</button></div><div class="rowmsg"></div></td>
+    <td><input class="k-base" placeholder="选服务商后自动填写"></td>
+    <td><input type="checkbox" class="k-img" style="width:auto"></td>
+    <td><button class="btn k-del" title="删除这一行">×</button></td>`;
+  $('#key-rows').appendChild(tr);
+  const sel = tr.querySelector('.k-preset'), model = tr.querySelector('.k-model'), key = tr.querySelector('.k-key');
+  sel.onchange = () => {
+    const p = presetBy(sel.value); if (!p) return;
+    tr.querySelector('.k-base').value = p.base_url;
+    model.setAttribute('list', 'dl-' + p.key);
+    model.placeholder = (p.models || [])[0] ? '例如 ' + p.models.join(', ') : '填写服务商控制台里的模型名称';
+    if (!model.value && p.model) model.value = p.model;
+  };
+  key.oninput = () => { if (!sel.value) { const k = detectPreset(key.value); if (k) { sel.value = k; sel.onchange(); } } };
+  tr.querySelector('.k-eye').onclick = () => { key.type = key.type === 'password' ? 'text' : 'password'; };
+  tr.querySelector('.k-del').onclick = () => { tr.remove(); if (!$('#key-rows').children.length) addRow(); };
+  if (v.preset) { sel.value = v.preset; sel.onchange(); }
+  if (v.model) model.value = v.model;
+  if (v.key) key.value = v.key;
+  return tr;
 }
+function detectPreset(k) {
+  k = (k || '').trim();
+  const p = PRESETS.find(p => (p.key_prefix || []).some(x => k.startsWith(x)));
+  return p ? p.key : '';
+}
+function presetFromWord(w) {
+  const lw = w.toLowerCase();
+  const p = PRESETS.find(p => p.key === lw || p.label.toLowerCase().split(/[\s（(/]/)[0] === lw);
+  if (p) return p.key;
+  const a = Object.keys(ALIASES).find(x => lw === x.toLowerCase());
+  return a ? ALIASES[a] : '';
+}
+// model names are lowercase words with hyphens; keys carry a known prefix, upper-case letters or long random runs
+const looksLikeKey = t => t.startsWith('env:') || /^(sk-|sk_|AIza)/.test(t) ||
+  (t.length >= 30 && !/[/:]/.test(t) && (/[A-Z]/.test(t) || /^[0-9a-f-]{30,}$/.test(t) || (t.length >= 32 && (t.match(/\d/g) || []).length >= 6)));
+$('#add-row').onclick = () => addRow();
+$('#toggle-paste').onclick = () => { const b = $('#paste-box'); b.style.display = b.style.display === 'none' ? 'block' : 'none'; };
+$('#parse-paste').onclick = () => {
+  const lines = $('#paste').value.split('\n').map(l => l.trim()).filter(Boolean);
+  let added = 0, unsure = 0;
+  // drop the untouched empty first row
+  [...$('#key-rows').children].forEach(tr => { if (!tr.querySelector('.k-key').value && !tr.querySelector('.k-model').value) tr.remove(); });
+  for (const line of lines) {
+    const toks = line.split(/[\s|,，]+/).filter(Boolean);
+    let key = '', preset = ''; const models = [];
+    for (const t of toks) {
+      const pk = presetFromWord(t);
+      if (!preset && pk) preset = pk;
+      else if (!key && looksLikeKey(t)) key = t;
+      else models.push(t);
+    }
+    preset = preset || detectPreset(key);
+    if (!preset) unsure++;
+    addRow({preset, model: models.join(', '), key}); added++;
+  }
+  if (!$('#key-rows').children.length) addRow();
+  $('#paste').value = '';
+  $('#paste-msg').innerHTML = `已填入 ${added} 行` + (unsure ? `，<span class="err">${unsure} 行没认出服务商，请在表格里选择</span>` : '') + '。确认无误后点“全部保存并测试连接”。';
+};
+$('#save-all').onclick = async () => {
+  const trs = [...$('#key-rows').children];
+  const rows = [], map = [];
+  trs.forEach(tr => {
+    const preset = tr.querySelector('.k-preset').value, model = tr.querySelector('.k-model').value.trim();
+    const key = tr.querySelector('.k-key').value.trim(), base = tr.querySelector('.k-base').value.trim();
+    const msg = tr.querySelector('.rowmsg');
+    if (!preset && !model && !key) return;
+    if (!preset) { msg.innerHTML = '<span class="err">请选择服务商</span>'; return; }
+    if (!model) { msg.innerHTML = '<span class="err">请填写模型名称</span>'; return; }
+    const p = presetBy(preset);
+    rows.push({protocol: p.protocol, base_url: base || p.base_url, model, api_key: key,
+      label: p.label.replace(/（.*?）|\(.*?\)/g, '').trim(), can_image: tr.querySelector('.k-img').checked});
+    map.push(tr); msg.innerHTML = '<span class="hint">保存并测试中…</span>';
+  });
+  if (!rows.length) { $('#add-msg').innerHTML = '<span class="err">请至少填写一行</span>'; return; }
+  $('#save-all').disabled = true;
+  const r = await api('/api/models/batch', {models: rows});
+  $('#save-all').disabled = false;
+  if (r.error) { $('#add-msg').innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+  const byRow = {};
+  r.results.forEach(x => (byRow[x.row] = byRow[x.row] || []).push(x));
+  let ok = 0, bad = 0;
+  map.forEach((tr, i) => {
+    const res = byRow[i] || [];
+    const good = res.length && res.every(x => x.ok);
+    ok += res.filter(x => x.ok).length; bad += res.filter(x => !x.ok).length;
+    tr.querySelector('.rowmsg').innerHTML = res.map(x => x.ok ? `<span class="ok">✓ ${esc(x.name || '')} ${x.latency}s</span>`
+      : `<span class="err" title="${esc(x.error)}">✗ ${esc(x.name || '')}：${esc((x.error || '').split('（')[0].slice(0, 60))}</span>`).join('<br>');
+    if (good) setTimeout(() => tr.remove(), 2500);   // keep failed rows so they can be fixed
+  });
+  setTimeout(() => { if (!$('#key-rows').children.length) addRow(); }, 2600);
+  $('#add-msg').innerHTML = `<span class="${bad ? 'err' : 'ok'}">已保存 ${ok + bad} 个模型：${ok} 个连接成功${bad ? `，${bad} 个失败（行内有原因，改好后再点保存）` : ''}</span>`;
+  await loadModels();
+  r.results.filter(x => x.id).forEach(x => { const c = $('#ping-' + x.id); if (c) c.innerHTML = x.ok ? `<span class="ok">✓ ${x.latency}s</span>` : `<span class="err" title="${esc(x.error)}">✗ 失败</span>`; });
+};
 async function loadModels() {
   MODELS = await api('/api/models');
   $('#model-list').innerHTML = MODELS.length ? MODELS.map(m => `
@@ -163,20 +265,8 @@ async function loadModels() {
       <td>${esc(m.model)}</td><td>${esc(m.api_key_masked || '—')}</td>
       <td id="ping-${m.id}"><span class="hint">未测试</span></td>
       <td class="row"><button class="btn" onclick="ping('${m.id}')">测试连接</button><button class="btn" onclick="del('${m.id}')">删除</button></td></tr>`).join('')
-    : '<tr><td colspan="6" class="empty">还没有模型。填写上面的表单，或先添加演示模型。</td></tr>';
+    : '<tr><td colspan="6" class="empty">还没有模型。在上面填写 Key，或先添加演示模型。</td></tr>';
 }
-$('#add').onclick = async () => {
-  const body = {name: $('#m-name').value.trim(), base_url: $('#m-base').value.trim(), model: $('#m-model').value.trim(),
-    api_key: $('#m-key').value.trim(), protocol: $('#m-proto').value, can_image: $('#m-img').checked,
-    image_model: $('#m-imgmodel').value.trim()};
-  if (!body.name) body.name = body.model || '未命名模型';
-  const r = await api('/api/models', body);
-  if (r.error) { $('#add-msg').innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
-  $('#add-msg').innerHTML = `<span class="ok">已保存，正在测试连接…</span>`;
-  $('#m-key').value = '';
-  await loadModels(); await ping(r.id);
-  $('#add-msg').textContent = '';
-};
 $('#demo').onclick = async () => { const r = await api('/api/demo', {}); $('#add-msg').textContent = `已添加 ${r.added} 个演示模型`; loadModels(); };
 $('#quick-bench').onclick = async () => {
   await loadModels();

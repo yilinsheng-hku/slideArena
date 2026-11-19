@@ -6,7 +6,7 @@
 
 There are many models and agents that can make PPTs. Trying each one by hand costs time and API quota. SlideArena automates the comparison and routing:
 
-1. **Connect models**: add an API key for OpenAI, Claude, Gemini, DeepSeek, Kimi, Qwen, Doubao, Zhipu, SiliconFlow, OpenRouter, Ollama, or any OpenAI-compatible endpoint.
+1. **Connect models**: enter several keys at once in a table (or paste them all and let the app recognise providers; one key can cover several models) for OpenAI, Claude, Gemini, DeepSeek, Kimi, Qwen, Doubao, Zhipu, SiliconFlow, OpenRouter, Ollama, or any OpenAI-compatible endpoint.
 2. **Benchmark abilities**: have every model answer the same PPT task bank, score the results, and build a leaderboard.
 3. **Delegate deck work**: give the outline to the strongest writing model, chart slides to the most accurate data model, and the cover image to an image-capable model. Apply one local theme and export an **editable** `.pptx`.
 

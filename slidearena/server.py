@@ -169,6 +169,11 @@ class Handler(BaseHTTPRequestHandler):
             allowed = {"id", "name", "protocol", "base_url", "model", "api_key", "can_image", "image_model", "mock_skill"}
             entry = config.upsert_model({k: v for k, v in body.items() if k in allowed})
             return self._json(config.public_model(entry))
+        if p == "/api/models/batch":
+            rows = body.get("models")
+            if not isinstance(rows, list) or not rows or len(rows) > 50:
+                return self._json({"error": "models 需要是 1–50 项的列表"}, 400)
+            return self._json({"results": add_models_batch(rows)})
         if p == "/api/models/delete":
             return self._json({"ok": config.delete_model(body.get("id", ""))})
         if p == "/api/models/test":
@@ -236,6 +241,49 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "internal server error"}, 500)
             except Exception:
                 pass
+
+
+MODEL_FIELDS = {"id", "name", "protocol", "base_url", "model", "api_key", "can_image", "image_model", "mock_skill", "vision"}
+
+
+def add_models_batch(rows: list) -> list[dict]:
+    """Save several models at once, then test every connection in parallel.
+
+    A row's "model" may hold several names separated by commas or new lines: one key, several
+    models. Re-entering an existing endpoint + model updates it (new key) instead of duplicating it.
+    Returns one result per saved model: {row, id, name, ok, latency | error}."""
+    from concurrent.futures import ThreadPoolExecutor
+    saved, results = [], []
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            results.append({"row": i, "ok": False, "error": "格式不对"})
+            continue
+        protocol = row.get("protocol") or "openai"
+        names = [n.strip() for n in re.split(r"[,，\n]+", str(row.get("model") or "")) if n.strip()]
+        if protocol == "mock":
+            names = names or ["mock"]
+        if not names:
+            results.append({"row": i, "ok": False, "error": "请填写模型名称"})
+            continue
+        if protocol != "mock" and not row.get("base_url"):
+            results.append({"row": i, "ok": False, "error": "请填写接口地址 base_url"})
+            continue
+        for name in names:
+            entry = {k: v for k, v in row.items() if k in MODEL_FIELDS and k != "id"}
+            entry.update(protocol=protocol, model=name)
+            label = str(row.get("label") or "").strip()
+            entry["name"] = str(row.get("name") or "").strip() if len(names) == 1 and row.get("name") else (
+                f"{label} · {name}" if label else name)
+            old = config.find_model(entry.get("base_url", ""), name, protocol)
+            if old:
+                entry["id"] = old["id"]
+            saved.append((i, config.upsert_model(entry)))
+    if saved:
+        with ThreadPoolExecutor(max_workers=min(8, len(saved))) as ex:
+            pings = list(ex.map(lambda t: benchmark.ping(t[1]), saved))
+        for (i, m), r in zip(saved, pings):
+            results.append({"row": i, "id": m["id"], "name": m["name"], **r})
+    return sorted(results, key=lambda r: r["row"])
 
 
 def add_demo_models() -> int:

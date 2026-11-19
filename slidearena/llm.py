@@ -25,17 +25,17 @@ from . import config
 
 # Presets shown in the UI. Users can still type any base_url.
 PRESETS = [
-    {"key": "openai", "label": "OpenAI", "protocol": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5-mini"},
-    {"key": "anthropic", "label": "Anthropic Claude", "protocol": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-5-5"},
-    {"key": "gemini", "label": "Google Gemini (OpenAI 兼容)", "protocol": "openai", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash"},
-    {"key": "deepseek", "label": "DeepSeek", "protocol": "openai", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
-    {"key": "moonshot", "label": "Kimi / Moonshot", "protocol": "openai", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-turbo-preview"},
-    {"key": "dashscope", "label": "通义千问 DashScope", "protocol": "openai", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus"},
+    {"key": "openai", "label": "OpenAI", "protocol": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5-mini", "models": ["gpt-5", "gpt-5-mini"], "key_prefix": ["sk-proj-"]},
+    {"key": "anthropic", "label": "Anthropic Claude", "protocol": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-5-5", "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "key_prefix": ["sk-ant-"]},
+    {"key": "gemini", "label": "Google Gemini (OpenAI 兼容)", "protocol": "openai", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash", "models": ["gemini-2.5-pro", "gemini-2.5-flash"], "key_prefix": ["AIza"]},
+    {"key": "deepseek", "label": "DeepSeek", "protocol": "openai", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "models": ["deepseek-chat", "deepseek-reasoner"]},
+    {"key": "moonshot", "label": "Kimi / Moonshot", "protocol": "openai", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-turbo-preview", "models": ["kimi-k2-turbo-preview"]},
+    {"key": "dashscope", "label": "通义千问 DashScope", "protocol": "openai", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "models": ["qwen-plus", "qwen-max"]},
     {"key": "ark", "label": "豆包 火山方舟", "protocol": "openai", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": ""},
-    {"key": "zhipu", "label": "智谱 GLM", "protocol": "openai", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.6"},
+    {"key": "zhipu", "label": "智谱 GLM", "protocol": "openai", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.6", "models": ["glm-4.6"]},
     {"key": "siliconflow", "label": "SiliconFlow 硅基流动", "protocol": "openai", "base_url": "https://api.siliconflow.cn/v1", "model": ""},
-    {"key": "openrouter", "label": "OpenRouter", "protocol": "openai", "base_url": "https://openrouter.ai/api/v1", "model": ""},
-    {"key": "ollama", "label": "Ollama（本地）", "protocol": "openai", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:14b"},
+    {"key": "openrouter", "label": "OpenRouter", "protocol": "openai", "base_url": "https://openrouter.ai/api/v1", "model": "", "models": [], "key_prefix": ["sk-or-"]},
+    {"key": "ollama", "label": "Ollama（本地）", "protocol": "openai", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:14b", "models": ["qwen3:14b"]},
     {"key": "custom", "label": "自定义 OpenAI 兼容接口", "protocol": "openai", "base_url": "", "model": ""},
     {"key": "mock", "label": "演示模型（离线，不花钱）", "protocol": "mock", "base_url": "", "model": "mock"},
 ]
