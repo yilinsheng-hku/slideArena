@@ -85,9 +85,7 @@ def print_board(r: dict) -> None:
     if pw.get("judged"):
         by = pw.get("by_dim") or {"text": pw["judged"]}
         parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 组" for d, n in by.items() if n]
-        mutual = any(m in ("mutual", "mixed") for m in (pw.get("modes") or {}).values())
-        print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%"
-              f"{'；没有第三方裁判的组由双方互评' if mutual else ''}）")
+        print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%）")
     case_stats = r.get("case_stats", [])
     if case_stats:
         print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")

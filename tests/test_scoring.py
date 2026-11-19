@@ -285,7 +285,8 @@ for n in (5, 6, 9, 12):
     check(balanced and covered == set(_it.combinations(sorted(ids), 2)),
           f"{n} 个模型：每道题每个模型比较次数相同，轮换后覆盖全部 {n * (n - 1) // 2} 组")
 check(benchmark.judging_mode(["a"], ["a"]) == "none", "1 个模型：只按规则评分")
-check(benchmark.judging_mode(["a", "b"], ["a", "b"]) == "mutual", "2 个模型、没有裁判：双方互评")
+check(benchmark.judging_mode(["a", "b"], ["a", "b"]) == "none", "2 个模型、没有外部裁判：只按规则评分，不自评")
+check(benchmark.judging_mode(list("abc"), ["a", "b"]) == "partial", "只有 2 个裁判可用时，没有组外裁判的组被跳过")
 check(benchmark.judging_mode(["a", "b"], ["a", "b", "j"]) == "third_party", "2 个模型 + 外部裁判：第三方评审")
 check(benchmark.judging_mode(list("abc"), list("abc")) == "third_party", "3 个模型：互相当第三方裁判")
 one = benchmark.summarize([{**recs[0], "dimension": "text", "kind": "outline"}], [{"id": "m"}])["m"]

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- One-click benchmarking now works for any number of models: rule scores only for one model, mutual review (a win needs the loser to agree) for two, third-party review for three or more.
+- One-click benchmarking now works for any number of models: rule scores only for one or two models (no self-judging), third-party pairwise review for three or more.
 - Pairwise review uses balanced, rotating pairings and least-loaded judges, so each model's review cost stays flat as the number of models grows.
 - Models that fail a connection check are excluded before the run and listed on the leaderboard.
 - Added a run plan (calls and review method) in the web app, `POST /api/benchmark/plan`, and before `slidearena bench`.

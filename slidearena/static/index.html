@@ -86,7 +86,7 @@
     <h2>一键能力测试</h2>
     <p class="hint">题库共 31 道题：写大纲 ×6、大纲改错 ×2、压缩成一页 ×4、从资料做图表 ×11、排版 ×7，并包含配图生成测试。
       全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。<b>接入几个模型都能直接开测</b>：
-      1 个模型只按规则评分；2 个模型时大纲和排版由双方<b>互评</b>（输的一方也认输才算胜，自评偏向只会变成平局）；3 个及以上由第三方模型<b>两两对比</b>评审，不会自己评自己。每组正反各问一次，抵消位置偏差。
+      1–2 个模型只按规则评分；3 个及以上时，大纲和排版还会由第三方模型<b>两两对比</b>评审，不会自己评自己。每组正反各问一次，抵消位置偏差。
       模型很多时按均衡轮换配对，每个模型的评审开销不随人数增长。连不上的模型会在开测前自动排除。</p>
     <div id="bench-pick" class="row" style="margin-bottom:12px"></div>
     <div class="row" style="margin:0 0 12px">
@@ -233,7 +233,7 @@ async function loadBoard() { const b = await api('/api/benchmarks/latest'); if (
 const DIMS = [['text','文字 / 大纲'],['layout','排版'],['chart','数据图表'],['image','配图'],['speed','速度']];
 function drawBoard(b) {
   if (!b.version) { $('#board').innerHTML = '<div class="empty">这是旧版测试结果，请重新运行一次测试</div>'; return; }
-  const name = id => id === 'mutual' ? '双方互评' : (b.models.find(m => m.id === id) || {}).name || id;
+  const name = id => (b.models.find(m => m.id === id) || {}).name || id;
   const single = b.models.length === 1;
   const rows = b.models.map(m => ({m, s: b.scores[m.id] || {dims: {}}}));
   rows.forEach(r => { const v = ['text','layout','chart'].map(d => (r.s.dims[d] || {}).score || 0); r.total = v.reduce((a, c) => a + c, 0) / v.length; });

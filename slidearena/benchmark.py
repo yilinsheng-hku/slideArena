@@ -7,7 +7,7 @@ Pipeline
      Numbers are fact-checked against the source material (facts.py).
   3. Outline quality that rules cannot capture is judged *pairwise*: a third model sees two
      outlines side by side, twice with A/B swapped to cancel position bias. Models never judge
-     themselves; with only two models they judge each other and a win needs the loser to agree.
+     themselves; with only two models (and no extra judge) this step is skipped.
      Pairs are scheduled so each model is compared equally often whatever the number of models.
      Wins are combined with Bradley-Terry (stats.py).
   4. Per dimension we report the mean, a bootstrap confidence interval over cases, and whether
@@ -15,7 +15,7 @@ Pipeline
   5. Profiles store score, interval, cost and latency. Routing reads them.
 
 Dimensions
-  text    - outline writing (rules 75% + pairwise judging 25% when >= 2 models) and condensing
+  text    - outline writing (rules 75% + pairwise judging 25% when >= 3 models) and condensing
   chart   - picking, converting and computing the right numbers; refusing when there are none
   layout  - placing elements so nothing overlaps, everything fits, design asks are met
             (rules 75% + pairwise judging of rendered screenshots by vision models 25%)
@@ -182,25 +182,23 @@ def schedule_pairs(ids: list[str], case_index: int = 0, seed: int = 42) -> list[
 
 def judging_mode(model_ids: list[str], judge_ids: list[str]) -> str:
     """How pairs will be judged for this set of models and judges:
-    none        - fewer than two models (or no judge at all): rule scores only
+    none        - no pair has a judge outside it (one model, or two models and no outside
+                  judge): rule scores only; models never judge their own answers
     third_party - every pair can be judged by a model outside it
-    mutual      - no pair has an outside judge, so the two models judge each other
-    mixed       - some pairs third-party, some mutual"""
+    partial     - some pairs have no outside judge (e.g. only two vision-capable models);
+                  those pairs are skipped"""
     if len(model_ids) < 2 or not judge_ids:
         return "none"
-    modes = set()
-    for a, b in itertools.combinations(sorted(set(model_ids)), 2):
-        if any(j not in (a, b) for j in judge_ids):
-            modes.add("third_party")
-        elif a in judge_ids and b in judge_ids:
-            modes.add("mutual")
-    if not modes:
+    covered = [any(j not in (a, b) for j in judge_ids)
+               for a, b in itertools.combinations(sorted(set(model_ids)), 2)]
+    if not any(covered):
         return "none"
-    return modes.pop() if len(modes) == 1 else "mixed"
+    return "third_party" if all(covered) else "partial"
 
 
-def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> str | None:
-    """One judge, asked twice with A/B swapped. Returns "A", "B", "tie" or None on failure.
+def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> list[str] | None:
+    """One judge, asked twice with A/B swapped. Returns both verdicts ("A", "B" or "tie", already
+    mapped back to the unswapped order) or None on failure.
     A verdict counts only if both orders agree; disagreement is a tie (position bias)."""
     verdicts = []
     for flip in (False, True):
@@ -215,7 +213,7 @@ def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> str
         if flip and w != "tie":
             w = "B" if w == "A" else "A"
         verdicts.append(w)
-    return verdicts[0] if verdicts[0] == verdicts[1] else "tie"
+    return verdicts
 
 
 def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict], progress,
@@ -224,10 +222,9 @@ def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict]
 
     Works for any number of models:
       * pairs come from `schedule_pairs`, balanced per model;
-      * a pair is judged by a model outside it when one exists (least-loaded judge first, the
-        others as backups);
-      * otherwise (two models, no outside judge) both models judge the pair and a win counts only
-        when both agree, i.e. the loser concedes; a self-serving vote can only produce a tie.
+      * a pair is judged by a model outside it (least-loaded judge first, the others as backups);
+      * a pair with no outside judge (two models and no extra judge) is skipped: self-judging
+        is biased, and rule scores alone still rank the two models.
     Each judge is asked twice with A/B swapped; inconsistent answers are a tie."""
     by_case: dict[str, dict[str, dict]] = {}
     for r in records:
@@ -236,7 +233,6 @@ def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict]
     bank = C.OUTLINE if kind == "outline" else C.LAYOUT
     case_map = {c["id"]: c for c in bank}
     order_of = {c["id"]: i for i, c in enumerate(bank)}
-    judge_by_id = {j["id"]: j for j in judges}
     wins: dict[tuple[str, str], float] = {}
     log = []
     jobs = []
@@ -248,40 +244,30 @@ def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict]
             if eligible:
                 eligible.sort(key=lambda j: load[j["id"]])     # stable: ties keep config order
                 load[eligible[0]["id"]] += 1
-                jobs.append((cid, a, b, "third_party", eligible))
-            elif a in judge_by_id and b in judge_by_id:
-                jobs.append((cid, a, b, "mutual", [judge_by_id[a], judge_by_id[b]]))
+                jobs.append((cid, a, b, eligible))
     if not jobs:
         return {"wins": wins, "log": log, "judged": 0}
 
     def ask(job):
-        cid, a, b, mode, order = job
+        cid, a, b, order = job
         ra, rb = by_case[cid][a], by_case[cid][b]
-        case = case_map[cid]
-        if mode == "mutual":
-            votes = [_verdict_pair(j, kind, case, ra, rb) for j in order]
-            return job, order, votes
         # the same judge gives both orders; if it fails (rate limit, bad output), try the next one
         for judge in order:
-            v = _verdict_pair(judge, kind, case, ra, rb)
+            v = _verdict_pair(judge, kind, case_map[cid], ra, rb)
             if v is not None:
-                return job, [judge], [v]
-        return job, order[:1], [None]
+                return job, judge, v
+        return job, order[0], None
 
     label = "视觉评审" if kind == "layout" else "两两评审"
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for (cid, a, b, mode, _), used, votes in ex.map(ask, jobs):
-            entry = {"case": cid, "a": a, "b": b, "kind": kind, "mode": mode,
-                     "judge": used[0]["id"] if mode == "third_party" else "mutual",
-                     "judges": [j["id"] for j in used], "votes": votes}
-            if None in votes:
+        for (cid, a, b, _), judge, votes in ex.map(ask, jobs):
+            entry = {"case": cid, "a": a, "b": b, "kind": kind, "judge": judge["id"], "votes": votes}
+            if votes is None:
                 entry["result"] = "评审失败"
                 log.append(entry)
                 continue
-            if len(set(votes)) == 1 and votes[0] != "tie":
-                outcome = a if votes[0] == "A" else b
-            else:
-                outcome = "tie"                     # explicit tie, or mutual judges disagree
+            v1, v2 = votes
+            outcome = (a if v1 == "A" else b) if v1 == v2 and v1 != "tie" else "tie"  # inconsistent = tie
             entry["result"] = outcome
             if outcome == "tie":
                 wins[(a, b)] = wins.get((a, b), 0) + 0.5
@@ -290,8 +276,7 @@ def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict]
                 loser = b if outcome == a else a
                 wins[(outcome, loser)] = wins.get((outcome, loser), 0) + 1
             log.append(entry)
-            who = "双方互评" if mode == "mutual" else used[0]["name"]
-            progress(f"{label} {cid}：{a} vs {b} → {'平局' if outcome == 'tie' else outcome}（评审：{who}）")
+            progress(f"{label} {cid}：{a} vs {b} → {'平局' if outcome == 'tie' else outcome}（评审：{judge['name']}）")
     return {"wins": wins, "log": log, "judged": sum(1 for x in log if x["result"] != "评审失败")}
 
 
@@ -405,10 +390,9 @@ def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
 
 
 JUDGING_TEXT = {
-    "none": "只有 1 个模型，没有对手可比：只按规则评分（大纲、排版不加两两评审）",
+    "none": "没有第三个模型当裁判：只按规则评分，不做两两评审（模型不评自己）",
     "third_party": "两两评审：每组由第三个模型当裁判，模型不会评自己",
-    "mutual": "两两评审：没有第三个模型，改为双方互评——只有输的一方也认输才算胜，否则记平局，自评偏向只会变成平局",
-    "mixed": "两两评审：有第三方裁判的组由第三方评，没有的组双方互评",
+    "partial": "两两评审：每组由第三个模型当裁判；找不到组外裁判的组跳过",
 }
 
 
@@ -439,9 +423,7 @@ def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int 
         calls = 0
         if mode != "none":
             for i, _ in enumerate(bank):
-                for a, b in schedule_pairs(ids, i):
-                    third = any(j["id"] not in (a, b) for j in pool)
-                    calls += 2 if third else 4
+                calls += 2 * sum(any(j["id"] not in pr for j in pool) for pr in schedule_pairs(ids, i))
         out["judging"][dim] = {"mode": mode, "calls": calls}
         out["judge_calls"] += calls
     n = len(models)
@@ -515,8 +497,8 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
     reachable = {m["id"] for m in models} | {m["id"] for m in all_models if m["id"] not in model_ids}
     judges = [m for m in all_models if m["id"] in (judge_ids or ids) and m["id"] in reachable]
     if pairwise:
-        if len(models) < 2:
-            progress("只有 1 个模型：没有对手可比，大纲和排版只按规则评分")
+        if judging_mode(ids, [j["id"] for j in judges]) == "none":
+            progress(JUDGING_TEXT["none"])
         if any(r["kind"] == "outline" for r in records):
             modes["text"] = judging_mode(ids, [j["id"] for j in judges])
             if modes["text"] != "none":

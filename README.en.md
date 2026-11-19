@@ -90,7 +90,7 @@ You do not need a fixed number of models. The review method adapts to how many t
 | Models | Pairwise review |
 |---|---|
 | 1 | Nothing to compare: rule scores only. The leaderboard shows absolute scores (reference answer = 100) and no "leader". |
-| 2 | With no third model, the two **review each other**. Each asks both A/B orders; a win counts only when both agree, otherwise it is a tie. A self-serving vote can only produce a tie, so the winner needs the loser to concede. |
+| 2 | No third model can judge, so pairwise review is skipped and scores are rule-based (models never judge themselves). Pairwise review is only 25% of a dimension; rule scores still decide the ranking. |
 | 3 or more | Each pair is reviewed by a model outside it, so no model judges itself. Reviews go to the least-loaded judge first. |
 | 5 or more | Each task compares one **balanced round** of pairs (every model 1–2 times), rotating across tasks so the bank covers every pair. Each model's review cost stays flat as the number of models grows. |
 
