@@ -174,13 +174,14 @@ def main():
     check(d_oa.get("image", {}).get("score") == 100 and "image" not in s[an["id"]]["dims"], "只有可出图模型参与配图测试")
     check(bad["id"] not in s and [x["id"] for x in r["excluded"]] == [bad["id"]],
           "连不上的模型在开测前被排除，不影响其他模型")
-    check(all(p["judge"] not in (p["a"], p["b"]) for p in r["pairwise"]["log"]), "两两评审里模型不会评自己")
-    by = r["pairwise"].get("by_dim", {})
+    jd = r["judging"]
+    check(all(p["judge"] != p["model"] for p in jd["log"]), "对比参考答案评审里模型不会评自己的答案")
+    by = jd.get("by_dim", {})
     check(by.get("text", 0) > 0 and by.get("layout", 0) > 0, f"大纲评审和排版截图评审都完成了 {by}")
     check(SEEN.get("visual_judge_images", 0) > 0 and SEEN.get("saw_image_parts"), "排版截图以图片形式发给了评审模型")
     # the fake judge always prefers the second picture, so swapping A/B makes every verdict inconsistent
-    check(all(p["result"] == "tie" for p in r["pairwise"]["log"] if p.get("kind") == "layout"),
-          "评审总选同一位置时，正反两次结论不一致，记为平局")
+    check(all(p["result"] == "tie" for p in jd["log"] if p.get("kind") == "layout"),
+          "评审总选同一位置时，正反两次结论不一致，记为持平")
     check("sk-ant-secret" not in json.dumps(r, ensure_ascii=False), "测试结果里不包含明文 Key")
     check(benchmark.route("text", [oa, an]) is not None, "路由能在已测模型中选出执行者")
 

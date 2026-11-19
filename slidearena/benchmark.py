@@ -5,29 +5,31 @@ Pipeline
      (`repeats`) because LLM output varies between calls.
   2. Deterministic scorers (scoring.py) grade each answer and explain lost points.
      Numbers are fact-checked against the source material (facts.py).
-  3. Outline quality that rules cannot capture is judged *pairwise*: a third model sees two
-     outlines side by side, twice with A/B swapped to cancel position bias. Models never judge
-     themselves; with only two models (and no extra judge) this step is skipped.
-     Pairs are scheduled so each model is compared equally often whatever the number of models.
-     Wins are combined with Bradley-Terry (stats.py).
-  4. Per dimension we report the mean, a bootstrap confidence interval over cases, and whether
-     the gap to the leader is real or within noise (paired bootstrap).
-  5. Profiles store score, interval, cost and latency. Routing reads them.
+  3. Quality that rules cannot capture is judged against the case's reference answer: another
+     model sees the answer and the reference blind, as A and B, twice with the order swapped to
+     cancel position bias. Models never judge their own answers. Because the yardstick is fixed,
+     a score does not depend on which other models are in the run, and the cost per model is
+     constant whether 2 or 20 models take part.
+  4. Infrastructure failures (timeouts, 5xx, rate limits) are left out of the score, not counted
+     as wrong answers.
+  5. Per dimension we report the mean, a bootstrap confidence interval over cases, and which
+     models are clearly behind another, with one permutation test over all pairs (stats.py) so
+     the labels stay reliable with any number of models.
+  6. Profiles store score, interval, per-case scores, cost and latency. Routing reruns the
+     leaderboard's test on them, so both always agree.
 
 Dimensions
-  text    - outline writing (rules 75% + pairwise judging 25% when >= 3 models) and condensing
+  text    - outline writing (rules 75% + comparison with the reference 25%), revising, condensing
   chart   - picking, converting and computing the right numbers; refusing when there are none
   layout  - placing elements so nothing overlaps, everything fits, design asks are met
-            (rules 75% + pairwise judging of rendered screenshots by vision models 25%)
+            (rules 75% + vision-model comparison of rendered screenshots with the reference 25%)
   image   - generating an illustration (image-capable endpoints only; success rate)
   speed   - median latency, log scale
 """
 from __future__ import annotations
 
 import base64
-import itertools
 import json
-import random
 import statistics
 import time
 import traceback
@@ -118,8 +120,12 @@ def _run_one(model: dict, dim: str, kind: str, case: dict, rep: int) -> dict:
             rec["parsed"] = data
     except llm.RateLimited as e:
         # the account's rate limit, not the model's ability: leave this call out of the score
-        rec["skipped"] = True
+        rec.update(skipped=True, skip_reason="rate_limit")
         rec["notes"] = ["账号限流，多次重试仍被拒绝，本题不计分：" + str(e)[:160]]
+    except llm.ServiceError as e:
+        # timeouts, dropped connections, 5xx: the provider or network failed, not the model
+        rec.update(skipped=True, skip_reason="service")
+        rec["notes"] = ["服务商或网络故障，多次重试仍失败，本题不计分：" + str(e)[:160]]
     except llm.ModelError as e:
         rec["error"] = str(e)
         rec["notes"] = [str(e)[:200]]
@@ -130,7 +136,7 @@ def _run_one(model: dict, dim: str, kind: str, case: dict, rep: int) -> dict:
     return rec
 
 
-# --------------------------------------------------------------------------- pairwise judging
+# --------------------------------------------------------------------------- judging against the reference
 def _outline_text(data: dict) -> str:
     lines = []
     for i, s in enumerate(data.get("slides", []), 1):
@@ -159,47 +165,20 @@ def _judge_request(kind: str, case: dict, a_rec: dict, b_rec: dict, flip: bool) 
     return C.VISUAL_PAIRWISE_PROMPT.format(desc=case["desc"]), imgs
 
 
-def schedule_pairs(ids: list[str], case_index: int = 0, seed: int = 42) -> list[tuple[str, str]]:
-    """Which pairs to compare on one case, for any number of models.
-
-    Up to 4 models: every pair (at most 6). From 5 models on: one "round" of a circle schedule,
-    pairing each model with the one `d` seats away, so every model is compared the same number
-    of times on this case (twice, or once when d = N/2). `d` rotates from case to case, so over
-    the bank all pairs get covered while each model's judging cost stays constant as N grows.
-    """
-    ids = sorted(ids)
-    n = len(ids)
-    if n < 2:
-        return []
-    if n <= 4:
-        return list(itertools.combinations(ids, 2))
-    seats = ids[:]
-    random.Random(seed).shuffle(seats)      # seat order must not follow config order
-    d = 1 + case_index % (n // 2)
-    pairs = {tuple(sorted((seats[i], seats[(i + d) % n]))) for i in range(n)}
-    return sorted(pairs)
-
-
 def judging_mode(model_ids: list[str], judge_ids: list[str]) -> str:
-    """How pairs will be judged for this set of models and judges:
-    none        - no pair has a judge outside it (one model, or two models and no outside
-                  judge): rule scores only; models never judge their own answers
-    third_party - every pair can be judged by a model outside it
-    partial     - some pairs have no outside judge (e.g. only two vision-capable models);
-                  those pairs are skipped"""
-    if len(model_ids) < 2 or not judge_ids:
-        return "none"
-    covered = [any(j not in (a, b) for j in judge_ids)
-               for a, b in itertools.combinations(sorted(set(model_ids)), 2)]
+    """How answers will be judged against the reference answers:
+    none     - no model has another model to judge it (one model, no extra judge): rules only
+    anchored - every model is judged by some other model
+    partial  - some models have no other judge (e.g. the only vision-capable model in the group)"""
+    covered = [any(j != mid for j in judge_ids) for mid in model_ids]
     if not any(covered):
         return "none"
-    return "third_party" if all(covered) else "partial"
+    return "anchored" if all(covered) else "partial"
 
 
 def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> list[str] | None:
     """One judge, asked twice with A/B swapped. Returns both verdicts ("A", "B" or "tie", already
-    mapped back to the unswapped order) or None on failure.
-    A verdict counts only if both orders agree; disagreement is a tie (position bias)."""
+    mapped back to the unswapped order) or None on failure."""
     verdicts = []
     for flip in (False, True):
         try:
@@ -216,68 +195,62 @@ def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> lis
     return verdicts
 
 
-def pairwise_judging(records: list[dict], models: list[dict], judges: list[dict], progress,
-                     kind: str = "outline") -> dict:
-    """Judge answers pairwise: outlines as text, layouts as rendered screenshots (vision judges).
+JUDGE_POINTS = {"win": 100.0, "tie": 50.0, "loss": 0.0}
 
-    Works for any number of models:
-      * pairs come from `schedule_pairs`, balanced per model;
-      * a pair is judged by a model outside it (least-loaded judge first, the others as backups);
-      * a pair with no outside judge (two models and no extra judge) is skipped: self-judging
-        is biased, and rule scores alone still rank the two models.
-    Each judge is asked twice with A/B swapped; inconsistent answers are a tie."""
-    by_case: dict[str, dict[str, dict]] = {}
-    for r in records:
-        if r["kind"] == kind and r.get("parsed") and r["rep"] == 0:
-            by_case.setdefault(r["task"], {})[r["model_id"]] = r
+
+def reference_judging(records: list[dict], models: list[dict], judges: list[dict], progress,
+                      kind: str = "outline") -> dict:
+    """Compare every answer with the case's hand-checked reference answer, blind.
+
+    The judge sees the model's answer and the reference as "A" and "B" (it is not told which is
+    which), twice with the order swapped; only two matching verdicts count, otherwise it is a tie.
+    The judge is always a model other than the one being judged (least-loaded first, the others as
+    backups), so it works the same for 2 models or 20 and costs 2 calls per answer.
+    Because the yardstick is fixed, the result does not depend on who else is in the run.
+    Returns {"results": {model_id: {case_id: points}}, "log": [...], "judged": n}."""
     bank = C.OUTLINE if kind == "outline" else C.LAYOUT
     case_map = {c["id"]: c for c in bank}
-    order_of = {c["id"]: i for i, c in enumerate(bank)}
-    wins: dict[tuple[str, str], float] = {}
-    log = []
-    jobs = []
+    answers = [r for r in records if r["kind"] == kind and r.get("parsed") and r["rep"] == 0
+               and r["task"] in case_map]
+    answers.sort(key=lambda r: (r["task"], r["model_id"]))
     load = {j["id"]: 0 for j in judges}
-    for cid in sorted(by_case, key=lambda c: order_of.get(c, 0)):
-        answers = by_case[cid]
-        for a, b in schedule_pairs(list(answers), order_of.get(cid, 0)):
-            eligible = [j for j in judges if j["id"] not in (a, b)]
-            if eligible:
-                eligible.sort(key=lambda j: load[j["id"]])     # stable: ties keep config order
-                load[eligible[0]["id"]] += 1
-                jobs.append((cid, a, b, eligible))
+    jobs = []
+    for r in answers:
+        eligible = [j for j in judges if j["id"] != r["model_id"]]
+        if not eligible:
+            continue
+        eligible.sort(key=lambda j: load[j["id"]])          # stable: ties keep config order
+        load[eligible[0]["id"]] += 1
+        jobs.append((r, eligible))
+    results: dict[str, dict[str, float]] = {}
+    log: list[dict] = []
     if not jobs:
-        return {"wins": wins, "log": log, "judged": 0}
+        return {"results": results, "log": log, "judged": 0}
 
     def ask(job):
-        cid, a, b, order = job
-        ra, rb = by_case[cid][a], by_case[cid][b]
-        # the same judge gives both orders; if it fails (rate limit, bad output), try the next one
-        for judge in order:
-            v = _verdict_pair(judge, kind, case_map[cid], ra, rb)
-            if v is not None:
-                return job, judge, v
-        return job, order[0], None
+        r, order = job
+        ref = {"parsed": case_map[r["task"]]["reference"]}
+        for judge in order:                     # same judge for both orders; next one if it fails
+            votes = _verdict_pair(judge, kind, case_map[r["task"]], r, ref)
+            if votes is not None:
+                return r, judge, votes
+        return r, order[0], None
 
-    label = "视觉评审" if kind == "layout" else "两两评审"
+    names = {m["id"]: m["name"] for m in models}
+    label = "排版截图评审" if kind == "layout" else "大纲评审"
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for (cid, a, b, _), judge, votes in ex.map(ask, jobs):
-            entry = {"case": cid, "a": a, "b": b, "kind": kind, "judge": judge["id"], "votes": votes}
+        for r, judge, votes in ex.map(ask, jobs):
+            entry = {"case": r["task"], "model": r["model_id"], "kind": kind, "judge": judge["id"], "votes": votes}
             if votes is None:
                 entry["result"] = "评审失败"
-                log.append(entry)
-                continue
-            v1, v2 = votes
-            outcome = (a if v1 == "A" else b) if v1 == v2 and v1 != "tie" else "tie"  # inconsistent = tie
-            entry["result"] = outcome
-            if outcome == "tie":
-                wins[(a, b)] = wins.get((a, b), 0) + 0.5
-                wins[(b, a)] = wins.get((b, a), 0) + 0.5
             else:
-                loser = b if outcome == a else a
-                wins[(outcome, loser)] = wins.get((outcome, loser), 0) + 1
+                v1, v2 = votes
+                entry["result"] = ("win" if v1 == "A" else "loss") if v1 == v2 and v1 != "tie" else "tie"
+                results.setdefault(r["model_id"], {})[r["task"]] = JUDGE_POINTS[entry["result"]]
+                word = {"win": "胜过参考答案", "tie": "与参考答案持平", "loss": "不如参考答案"}[entry["result"]]
+                progress(f"{label} {r['task']}：{names.get(r['model_id'], r['model_id'])} {word}（评审：{judge['name']}）")
             log.append(entry)
-            progress(f"{label} {cid}：{a} vs {b} → {'平局' if outcome == 'tie' else outcome}（评审：{judge['name']}）")
-    return {"wins": wins, "log": log, "judged": sum(1 for x in log if x["result"] != "评审失败")}
+    return {"results": results, "log": log, "judged": sum(1 for x in log if x["result"] != "评审失败")}
 
 
 # --------------------------------------------------------------------------- summary
@@ -288,12 +261,28 @@ def _price(model: dict, rec: dict) -> float | None:
     return (rec["in_tokens"] * float(pin) + rec["out_tokens"] * float(pout)) / 1e6
 
 
-def summarize(records: list[dict], models: list[dict], pair: dict | None = None) -> dict:
+JUDGE_WEIGHT = 0.25     # share of a judged case's score that comes from the comparison with the reference
+
+
+def _clamp(v: float) -> float:
+    return round(max(0.0, min(100.0, v)), 1)
+
+
+def summarize(records: list[dict], models: list[dict], judged: dict | None = None) -> dict:
+    """Per-model scores. judged[dim]["results"][model][case] = points vs the reference
+    (100 beat it, 50 as good, 0 worse). On a judged case the score moves by
+    JUDGE_WEIGHT * (points - 50): matching the reference leaves the rule score unchanged, so runs
+    with and without judging, and with any set of opponents, stay on the same scale."""
+    judged = judged or {}
     out: dict[str, dict] = {}
     for m in models:
         allmine = [r for r in records if r["model_id"] == m["id"]]
-        mine = [r for r in allmine if not r.get("skipped")]          # rate-limited calls do not count
-        row: dict = {"dims": {}, "skipped": len(allmine) - len(mine)}
+        mine = [r for r in allmine if not r.get("skipped")]          # infra failures do not count
+        skipped = [r for r in allmine if r.get("skipped")]
+        row: dict = {"dims": {}, "skipped": len(skipped),
+                     "skipped_service": sum(1 for r in skipped if r.get("skip_reason") == "service"),
+                     "skipped_rate_limit": sum(1 for r in skipped if r.get("skip_reason") != "service"),
+                     "unscored_rate": round(len(skipped) / max(1, len(allmine)), 3)}
         for dim in ("text", "layout", "chart", "image"):
             rs = [r for r in mine if r["dimension"] == dim]
             if not rs:
@@ -302,12 +291,19 @@ def summarize(records: list[dict], models: list[dict], pair: dict | None = None)
             per_case: dict[str, list[float]] = {}
             for r in rs:
                 per_case.setdefault(r["task"], []).append(r["score"])
-            case_scores = [statistics.mean(v) for v in per_case.values()]
-            mean, lo, hi = stats.bootstrap_ci(case_scores)
-            row["dims"][dim] = {"score": round(mean, 1), "lo": round(lo, 1), "hi": round(hi, 1),
-                                "cases": {k: round(statistics.mean(v), 1) for k, v in per_case.items()},
-                                "stdev_repeats": round(statistics.mean(
-                                    [statistics.pstdev(v) for v in per_case.values() if len(v) > 1] or [0]), 1)}
+            rule_cases = {k: round(statistics.mean(v), 1) for k, v in per_case.items()}
+            vs_ref = ((judged.get(dim) or {}).get("results") or {}).get(m["id"], {})
+            cases = {k: _clamp(v + JUDGE_WEIGHT * (vs_ref[k] - 50)) if k in vs_ref else v
+                     for k, v in rule_cases.items()}
+            mean, lo, hi = stats.bootstrap_ci(list(cases.values()))
+            d = {"score": round(mean, 1), "lo": round(lo, 1), "hi": round(hi, 1), "cases": cases,
+                 "stdev_repeats": round(statistics.mean(
+                     [statistics.pstdev(v) for v in per_case.values() if len(v) > 1] or [0]), 1)}
+            if vs_ref:
+                d["rule_score"] = round(statistics.mean(rule_cases.values()), 1)
+                d["vs_reference"] = round(statistics.mean(vs_ref.values()), 1)   # 50 = as good as the reference
+                d["judged_cases"] = len(vs_ref)
+            row["dims"][dim] = d
         ok = [r for r in mine if not r["error"] and r["dimension"] != "image"]
         lat = sorted(r["latency"] for r in ok)
         row["median_latency"] = round(lat[len(lat) // 2], 2) if lat else None
@@ -322,46 +318,24 @@ def summarize(records: list[dict], models: list[dict], pair: dict | None = None)
         row["cost"] = round(sum(c for c in costs if c is not None), 4) if all(c is not None for c in costs) else None
         out[m["id"]] = row
 
-    # pairwise judging blends into its dimension (25%): outline judging -> "text",
-    # screenshot judging -> "layout". Older callers pass a single outline result.
-    if pair and "wins" in pair:
-        pair = {"text": pair}
-    for dim, pr in (pair or {}).items():
-        if not pr or not pr.get("judged"):
-            continue
-        ids = [m["id"] for m in models if dim in out[m["id"]]["dims"]]
-        elo = stats.bradley_terry(ids, pr["wins"])
-        pts = stats.win_rate_to_points(elo)
-        for mid in ids:
-            d = out[mid]["dims"][dim]
-            d["rule_score"] = d["score"]
-            d["elo"] = elo[mid]
-            d["pairwise"] = pts[mid]
-            shift = 0.25 * (pts[mid] - 50)          # 50 = average opponent, so no inflation overall
-            clamp = lambda v: round(max(0.0, min(100.0, v)), 1)  # noqa: E731
-            d["score"] = clamp(d["score"] + shift)
-            d["lo"], d["hi"] = clamp(d["lo"] + shift), clamp(d["hi"] + shift)
-            d["cases"] = {k: clamp(v + shift) for k, v in d["cases"].items()}
-
-    # is the leader really ahead? paired bootstrap on per-case scores vs every other model
     for dim in QUALITY_DIMS:
-        have = [mid for mid in out if dim in out[mid]["dims"]]
-        if not have:
-            continue
-        if len(have) == 1:
-            out[have[0]]["dims"][dim]["rank"] = "only"      # nothing to rank against
-            continue
-        leader = max(have, key=lambda mid: out[mid]["dims"][dim]["score"])
-        lc = out[leader]["dims"][dim]["cases"]
-        for mid in have:
-            d = out[mid]["dims"][dim]
-            if mid == leader:
-                d["rank"] = "leader"
-                continue
-            keys = [k for k in lc if k in d["cases"]]
-            sep = stats.separable([lc[k] for k in keys], [d["cases"][k] for k in keys])
-            d["rank"] = "behind" if sep == 1 else "tied"
+        rank_dimension({mid: row["dims"][dim] for mid, row in out.items() if dim in row["dims"]})
     return out
+
+
+def rank_dimension(dims: dict[str, dict]) -> None:
+    """Label each model "leader", "tied" (not clearly behind anyone) or "behind" (clearly worse
+    than at least one other model), with one test over all pairs at once (stats.behind_flags),
+    so the labels stay trustworthy however many models are compared."""
+    if not dims:
+        return
+    if len(dims) == 1:
+        next(iter(dims.values()))["rank"] = "only"           # nothing to rank against
+        return
+    flags = stats.behind_flags({mid: d["cases"] for mid, d in dims.items()})
+    leader = max(dims, key=lambda mid: dims[mid]["score"])
+    for mid, d in dims.items():
+        d["rank"] = "leader" if mid == leader else "behind" if flags[mid] else "tied"
 
 
 def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
@@ -390,9 +364,9 @@ def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
 
 
 JUDGING_TEXT = {
-    "none": "没有第三个模型当裁判：只按规则评分，不做两两评审（模型不评自己）",
-    "third_party": "两两评审：每组由第三个模型当裁判，模型不会评自己",
-    "partial": "两两评审：每组由第三个模型当裁判；找不到组外裁判的组跳过",
+    "none": "没有其他模型当裁判：只按规则评分（模型不评自己的答案）",
+    "anchored": "对比参考答案：每份答案与人工参考答案盲比，由另一个模型当裁判，分数不受同场对手影响",
+    "partial": "对比参考答案：由另一个模型当裁判；个别模型找不到其他裁判，只按规则评分",
 }
 
 
@@ -400,6 +374,13 @@ def _jobs(models: list[dict], repeats: int, dims: list[str] | None) -> list[tupl
     return [(m, dim, kind, case, rep) for m in models for rep in range(max(1, repeats))
             for dim, kind, case in task_list(m)
             if not (kind == "image" and rep) and (not dims or dim in dims)]
+
+
+def _judge_pools(judges: list[dict], visual: bool) -> list[tuple[str, str, list[dict]]]:
+    pools = [("text", "outline", judges)]
+    if visual:     # screenshots need a vision model; mark a model "vision": false to keep it out
+        pools.append(("layout", "layout", [j for j in judges if j.get("vision", True)]))
+    return pools
 
 
 def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int = 1,
@@ -413,17 +394,13 @@ def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int 
     out = {"models": len(models), "task_calls": len(jobs),
            "calls_per_model": {m["name"]: sum(1 for j in jobs if j[0] is m) for m in models},
            "judging": {}, "judge_calls": 0, "lines": []}
-    want = [("text", "outline", C.OUTLINE, judges)]
-    if visual:
-        want.append(("layout", "layout", C.LAYOUT, [j for j in judges if j.get("vision", True)]))
-    for dim, kind, bank, pool in want:
+    for dim, kind, pool in _judge_pools(judges, visual):
         if not pairwise or (dims and dim not in dims):
             continue
-        mode = judging_mode(ids, [j["id"] for j in pool])
-        calls = 0
-        if mode != "none":
-            for i, _ in enumerate(bank):
-                calls += 2 * sum(any(j["id"] not in pr for j in pool) for pr in schedule_pairs(ids, i))
+        pool_ids = [j["id"] for j in pool]
+        mode = judging_mode(ids, pool_ids)
+        bank = C.OUTLINE if kind == "outline" else C.LAYOUT
+        calls = 2 * len(bank) * sum(1 for mid in ids if any(j != mid for j in pool_ids))
         out["judging"][dim] = {"mode": mode, "calls": calls}
         out["judge_calls"] += calls
     n = len(models)
@@ -431,15 +408,13 @@ def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int 
                         + (f"（每个模型约 {len(jobs) // n} 次）" if n else ""))
     if out["judging"] and all(j["mode"] == "none" for j in out["judging"].values()):
         out["lines"].append(JUDGING_TEXT["none"])
-    for dim, j in out["judging"].items():
-        if all(x["mode"] == "none" for x in out["judging"].values()):
-            break
-        name = "大纲" if dim == "text" else "排版截图"
-        out["lines"].append(f"{name}：{JUDGING_TEXT[j['mode']]}" + (f"，约 {j['calls']} 次评审调用" if j["calls"] else ""))
-    if n >= 5 and out["judging"]:
-        out["lines"].append("模型较多：每道题只比一轮均衡配对（每个模型比 1–2 次），轮换覆盖全部组合，每个模型的评审开销不随人数增长")
+    else:
+        for dim, j in out["judging"].items():
+            name = "大纲" if dim == "text" else "排版截图"
+            out["lines"].append(f"{name}：{JUDGING_TEXT[j['mode']]}"
+                                + (f"，约 {j['calls']} 次评审调用（每个模型的开销固定，不随人数增长）" if j["calls"] else ""))
     if n:
-        out["lines"].append("开测前会先检查连接；连不上的模型自动排除，评审方式按实际参加的人数调整")
+        out["lines"].append("开测前会先检查连接；连不上的模型自动排除。网络或服务商故障的题不计分，不算模型答错")
     return out
 
 
@@ -460,12 +435,16 @@ def preflight(models: list[dict], progress) -> tuple[list[dict], list[dict]]:
     return ok, bad
 
 
+UNSCORED_WARN = 0.2     # warn (and keep out of routing) when more than this share of calls went unscored
+
+
 def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print, repeats: int = 1,
         pairwise: bool = True, dims: list[str] | None = None, visual: bool = True,
         check_connection: bool = True) -> dict:
     """Benchmark any number of models (1, 2, ... N) with one call.
 
-    dims: only test these dimensions (e.g. ["layout"]); visual: judge layout screenshots pairwise;
+    dims: only test these dimensions (e.g. ["layout"]); visual: judge layout screenshots;
+    pairwise: compare outlines / layouts with the reference answers using another model as judge;
     check_connection: ping first and leave unreachable models out."""
     all_models = config.list_models()
     models = [m for m in all_models if m["id"] in model_ids]
@@ -489,42 +468,42 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
         names = {m["id"]: m["name"] for m in models}
         for rec in ex.map(lambda j: _run_one(*j), jobs):
             records.append(rec)
-            status = "限流跳过" if rec.get("skipped") else "失败" if rec["error"] else f"{rec['score']:.0f} 分"
+            status = ("限流，不计分" if rec.get("skip_reason") == "rate_limit" else
+                      "网络/服务商故障，不计分" if rec.get("skipped") else
+                      "失败" if rec["error"] else f"{rec['score']:.0f} 分")
             progress(f"{names[rec['model_id']]} · {rec['task']} · {status}")
 
-    pair: dict[str, dict] = {}
+    judged: dict[str, dict] = {}
     modes: dict[str, str] = {}
-    reachable = {m["id"] for m in models} | {m["id"] for m in all_models if m["id"] not in model_ids}
+    reachable = set(ids) | {m["id"] for m in all_models if m["id"] not in model_ids}
     judges = [m for m in all_models if m["id"] in (judge_ids or ids) and m["id"] in reachable]
     if pairwise:
-        if judging_mode(ids, [j["id"] for j in judges]) == "none":
-            progress(JUDGING_TEXT["none"])
-        if any(r["kind"] == "outline" for r in records):
-            modes["text"] = judging_mode(ids, [j["id"] for j in judges])
-            if modes["text"] != "none":
-                progress(f"开始大纲两两对比评审（{JUDGING_TEXT[modes['text']].split('：', 1)[-1]}）…")
-                pair["text"] = pairwise_judging(records, models, judges, progress, kind="outline")
-        # vision judges look at rendered screenshots; mark a model "vision": false to keep it out
-        vjudges = [j for j in judges if j.get("vision", True)]
-        if visual and any(r["kind"] == "layout" for r in records):
-            modes["layout"] = judging_mode(ids, [j["id"] for j in vjudges])
-            if modes["layout"] != "none":
-                progress("开始排版截图视觉评审（把坐标渲染成图片，让能看图的模型比较）…")
-                pair["layout"] = pairwise_judging(records, models, vjudges, progress, kind="layout")
+        for dim, kind, pool in _judge_pools(judges, visual):
+            if not any(r["kind"] == kind for r in records):
+                continue
+            modes[dim] = judging_mode(ids, [j["id"] for j in pool])
+            if modes[dim] == "none":
+                progress(f"{'大纲' if dim == 'text' else '排版截图'}：{JUDGING_TEXT['none']}")
+                continue
+            progress(f"开始{'大纲' if dim == 'text' else '排版截图'}评审：与人工参考答案盲比，正反各问一次…")
+            judged[dim] = reference_judging(records, models, pool, progress, kind=kind)
 
-    scores = summarize(records, models, pair)
-    logs = [x for p in pair.values() for x in p.get("log", [])]
+    scores = summarize(records, models, judged)
+    for mid, row in scores.items():
+        if row["unscored_rate"] > UNSCORED_WARN:
+            progress(f"注意：{names[mid]} 有 {row['skipped']} 题因网络/限流没有计分，它的分数只基于剩下的题，可信度较低")
+    logs = [x for p in judged.values() for x in p.get("log", [])]
     case_stats = summarize_cases(records, models)
-    result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": 2, "bank_version": C.BANK_VERSION,
+    result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": 3, "bank_version": C.BANK_VERSION,
               "question_count": len(case_stats), "hard_count": sum(c.get("level") == "hard" for c in ALL_CASES),
               "case_stats": case_stats, "repeats": repeats,
               "duration": round(time.time() - t0, 1),
               "models": [config.public_model(m) for m in models],
               "excluded": excluded,
               "records": [{k: v for k, v in r.items() if k != "parsed"} for r in records],
-              "pairwise": {"log": logs, "judged": sum(p.get("judged", 0) for p in pair.values()),
-                           "by_dim": {d: p.get("judged", 0) for d, p in pair.items()},
-                           "modes": modes},
+              "judging": {"log": logs, "judged": sum(p.get("judged", 0) for p in judged.values()),
+                          "by_dim": {d: p.get("judged", 0) for d, p in judged.items()},
+                          "modes": modes, "weight": JUDGE_WEIGHT},
               "scores": scores}
     history = config.load("benchmarks.json", [])
     history.append(result)
@@ -542,10 +521,13 @@ def _update_profiles(scores: dict) -> None:
             p[dim] = d["score"]
             if "lo" in d:
                 p[dim + "_ci"] = [d["lo"], d["hi"]]
+            if "cases" in d:
+                p[dim + "_cases"] = d["cases"]          # routing re-runs the leaderboard's test on these
         p["median_latency"] = row["median_latency"]
         p["tokens_per_call"] = row["tokens_per_call"]
         p["errors"] = row["errors"]
         p["calls"] = row["calls"]
+        p["unscored_rate"] = row.get("unscored_rate", 0)
     config.save("profiles.json", prof)
 
 
@@ -568,12 +550,26 @@ def selftest() -> list[tuple[str, float]]:
 
 
 # --------------------------------------------------------------------------- routing
+def contenders(dim: str, scored: list[tuple[dict, dict]]) -> list[tuple[dict, dict]]:
+    """Models not clearly behind any other on `dim`: the same test the leaderboard uses, so the
+    deck never goes to a model the leaderboard calls "behind"."""
+    if len(scored) < 2:
+        return scored
+    if all(p.get(dim + "_cases") for _, p in scored):
+        flags = stats.behind_flags({m["id"]: p[dim + "_cases"] for m, p in scored}, n=500)
+        return [(m, p) for m, p in scored if not flags[m["id"]]]
+    # profiles from older versions have no per-case scores: fall back to interval overlap
+    best = max(scored, key=lambda t: t[1][dim])
+    best_lo = best[1].get(dim + "_ci", [best[1][dim]] * 2)[0]
+    return [(m, p) for m, p in scored if p.get(dim + "_ci", [p[dim]] * 2)[1] >= best_lo]
+
+
 def route(dim: str, candidates: list[dict] | None = None, prefer: str = "balanced") -> dict | None:
     """Pick the model for a task.
 
-    1. Keep models whose score is statistically tied with the best (CI overlap) and that
-       failed less than 20% of calls.
-    2. Among those, choose by preference: "quality" = highest score, "cheap" = fewest tokens
+    1. Drop models that failed, or went unscored (network / rate limits), on more than 20% of calls.
+    2. Keep the models that are not clearly behind any other (see `contenders`).
+    3. Among those, choose by preference: "quality" = highest score, "cheap" = fewest tokens
        per call, "fast" = lowest latency, "balanced" = score minus small cost/latency penalties.
     Without benchmark data, fall back to the first capable model.
     """
@@ -589,14 +585,12 @@ def route(dim: str, candidates: list[dict] | None = None, prefer: str = "balance
         if dim not in p:
             continue
         calls = max(1, p.get("calls") or 1)
-        if (p.get("errors") or 0) / calls > 0.2:
+        if (p.get("errors") or 0) / calls > 0.2 or (p.get("unscored_rate") or 0) > UNSCORED_WARN:
             continue
         scored.append((m, p))
     if not scored:
         return models[0]
-    best = max(scored, key=lambda t: t[1][dim])
-    best_lo = best[1].get(dim + "_ci", [best[1][dim]] * 2)[0]
-    tied = [(m, p) for m, p in scored if p.get(dim + "_ci", [p[dim]] * 2)[1] >= best_lo]
+    tied = contenders(dim, scored) or scored
     if prefer == "quality":
         return max(tied, key=lambda t: t[1][dim])[0]
     if prefer == "cheap":

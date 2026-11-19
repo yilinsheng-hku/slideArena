@@ -53,6 +53,7 @@ def _mark(rank: str | None, english: bool) -> str:
         "leader": "leader" if english else "第一",
         "tied": "tied" if english else "并列",
         "behind": "behind" if english else "落后",
+        "only": "single model" if english else "单模型",
     }
     return labels.get(rank or "behind", "behind" if english else "落后")
 
@@ -88,16 +89,20 @@ def render(result: dict, english: bool = False) -> str:
 
 
 def _metadata(result: dict, english: bool) -> str:
-    pairwise = result.get("pairwise", {})
-    by_dim = pairwise.get("by_dim", {})
+    # version 3 compares answers with the reference answers; older results compared models pairwise
+    judging = result.get("judging") or result.get("pairwise", {})
+    by_dim = judging.get("by_dim", {})
     outline = by_dim.get("text", 0)
     layout = by_dim.get("layout", 0)
+    anchored = "judging" in result
     if english:
-        review = f"outline review enabled ({outline} groups); visual layout review enabled ({layout} groups)"
+        unit = "answers compared with the reference" if anchored else "pairwise groups"
+        review = f"outline review: {outline} {unit}; layout screenshot review: {layout} {unit}"
         return (f"Test date: {result.get('time', '—')}; task bank: {result.get('bank_version', '—')} "
                 f"({result.get('question_count', '—')} tasks, {result.get('hard_count', '—')} hard); repeats per task: "
                 f"{result.get('repeats', '—')}; {review}. Results represent this task bank on this day only.")
-    review = f"大纲评审：开启（{outline} 组）；排版视觉评审：开启（{layout} 组）"
+    unit = "份（对比参考答案）" if anchored else "组（两两评审）"
+    review = f"大纲评审 {outline} {unit}；排版截图评审 {layout} {unit}"
     return (f"测试日期：{result.get('time', '—')}；题库版本：{result.get('bank_version', '—')}；题库题数：{result.get('question_count', '—')}（难题 {result.get('hard_count', '—')} 道）；"
             f"每题重复次数：{result.get('repeats', '—')}；"
             f"{review}。结果只代表这套题库在这一天的表现。")

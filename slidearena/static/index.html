@@ -86,8 +86,9 @@
     <h2>一键能力测试</h2>
     <p class="hint">题库共 31 道题：写大纲 ×6、大纲改错 ×2、压缩成一页 ×4、从资料做图表 ×11、排版 ×7，并包含配图生成测试。
       全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。<b>接入几个模型都能直接开测</b>：
-      1–2 个模型只按规则评分；3 个及以上时，大纲和排版还会由第三方模型<b>两两对比</b>评审，不会自己评自己。每组正反各问一次，抵消位置偏差。
-      模型很多时按均衡轮换配对，每个模型的评审开销不随人数增长。连不上的模型会在开测前自动排除。</p>
+      接入 2 个及以上模型时，大纲和排版还会<b>与人工参考答案盲比</b>，由另一个模型当裁判（不会评自己的答案），正反各问一次抵消位置偏差。
+      参考答案是固定的标尺，所以分数不受同场对手影响，不同批次的结果可以直接比较；每个模型的评审开销固定，不随人数增长。
+      “并列 / 落后”用一次覆盖所有模型的置换检验判定，模型再多也不会因为比较次数多而乱判落后。连不上的模型开测前自动排除，网络或服务商故障的题不计分。</p>
     <div id="bench-pick" class="row" style="margin-bottom:12px"></div>
     <div class="row" style="margin:0 0 12px">
       <span class="hint" style="margin:0">测试维度</span>
@@ -240,38 +241,42 @@ function drawBoard(b) {
   rows.sort((a, c) => c.total - a.total);
   const cell = (r, d) => {
     const x = r.s.dims[d]; if (!x) return '<td class="hint">—</td>';
-    const tag = single ? '' : x.rank === 'leader' ? '<span class="crown" title="该项第一">👑</span>' : x.rank === 'tied' ? '<span class="tag" title="与第一的差距在统计误差内">并列</span>' : '';
+    const tag = single ? '' : x.rank === 'leader' ? '<span class="crown" title="该项第一">👑</span>' : x.rank === 'tied' ? '<span class="tag" title="没有明显落后于任何模型">并列</span>' : '';
+    const judged = x.vs_reference != null ? `<div class="hint" style="margin:2px 0 0;font-size:11px" title="规则分 ${x.rule_score}；对比参考答案 ${x.judged_cases} 题，50 = 与参考答案持平">规则 ${Math.round(x.rule_score)} · 对比参考 ${Math.round(x.vs_reference)}</div>` : '';
     const ci = x.lo != null && x.lo !== x.hi ? `<div class="hint" style="margin:2px 0 0;font-size:11px">区间 ${Math.round(x.lo)}–${Math.round(x.hi)}</div>` : '';
-    return `<td><div class="score"><b class="${x.rank === 'leader' && !single ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}</td>`;
+    return `<td><div class="score"><b class="${x.rank === 'leader' && !single ? 'crown' : ''}">${Math.round(x.score)}</b><div class="bar"><i style="width:${x.score}%"></i></div>${tag}</div>${ci}${judged}</td>`;
   };
   const parts = p => Object.entries(p || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
   const caseStats = Object.fromEntries((b.case_stats || []).map(x => [x.task, x]));
-  const pw = (b.pairwise && b.pairwise.log) || [];
-  const pairCounts = (b.pairwise && b.pairwise.by_dim) || {};
-  const outlinePw = pw.filter(p => p.kind !== 'layout');
-  const layoutPw = pw.filter(p => p.kind === 'layout');
-  const pairTable = logs => `<table><thead><tr><th>题目</th><th>对比</th><th>评审</th><th>两次判决</th><th>结果</th></tr></thead><tbody>
-    ${logs.map(p => `<tr><td>${esc(p.case)}</td><td>${esc(name(p.a))} vs ${esc(name(p.b))}</td><td>${esc(name(p.judge))}</td>
-      <td>${esc((p.votes || []).join(' / '))}</td><td>${p.result === 'tie' ? '平局' : esc(p.result === '评审失败' ? '评审失败' : name(p.result))}</td></tr>`).join('')}
+  const jd = b.judging || {};                       // results before version 3 used model-vs-model judging
+  const jlog = jd.log || [];
+  const jCounts = jd.by_dim || {};
+  const outlineJ = jlog.filter(p => p.kind !== 'layout');
+  const layoutJ = jlog.filter(p => p.kind === 'layout');
+  const RESULT = {win: '胜过参考答案', tie: '持平', loss: '不如参考答案'};
+  const voteText = v => ({A: '答案好', B: '参考好', tie: '持平'}[v] || v);
+  const judgeTable = logs => `<table><thead><tr><th>题目</th><th>模型</th><th>评审</th><th>两次判决</th><th>结果</th></tr></thead><tbody>
+    ${logs.map(p => `<tr><td>${esc(p.case)}</td><td>${esc(name(p.model))}</td><td>${esc(name(p.judge))}</td>
+      <td>${esc((p.votes || []).map(voteText).join(' / '))}</td><td>${esc(RESULT[p.result] || p.result)}</td></tr>`).join('')}
     </tbody></table>`;
   $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 题库 ${esc(b.bank_version || '—')} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
-      ${single ? '' : '👑 该项第一 · <span class="tag">并列</span> 与第一的差距在统计误差内 · '}区间为 90% 置信区间</p>
-    ${single ? '<p class="hint">只测了 1 个模型：分数是相对题库的绝对分（参考答案 = 100），没有排名和两两评审。再接入模型即可对比。</p>' : ''}
+      ${single ? '' : '👑 该项第一 · <span class="tag">并列</span> 没有明显落后于任何模型 · 无标记 = 明显落后于至少一个模型 · '}区间为 90% 置信区间</p>
+    ${single ? '<p class="hint">只测了 1 个模型：分数是相对题库的绝对分（参考答案 = 100），没有排名；也没有其他模型当裁判，只按规则评分。</p>' : ''}
     ${(b.excluded || []).length ? `<p class="err" style="font-size:13px">连接失败、未参加本次测试：${b.excluded.map(x => `<span title="${esc(x.error)}">${esc(x.name)}</span>`).join('、')}</p>` : ''}
     ${b.case_stats ? `<p class="hint">共 ${b.question_count || b.case_stats.length} 道题，其中 ${b.case_stats.filter(x => x.saturated).length} 道饱和。</p>` : ''}
     <table><thead><tr><th>模型</th>${DIMS.map(d => `<th>${d[1]}</th>`).join('')}<th>中位耗时</th><th>token/次</th><th>失败</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.m.name)}</b></td>${DIMS.map(([d]) => cell(r, d)).join('')}
-      <td>${r.s.median_latency ?? '—'}s</td><td>${r.s.tokens_per_call ?? '—'}</td><td class="${r.s.errors ? 'err' : ''}">${r.s.errors || 0}${r.s.skipped ? `<br><small>限流未计分 ${r.s.skipped} 题</small>` : ''}</td></tr>`).join('')}
+      <td>${r.s.median_latency ?? '—'}s</td><td>${r.s.tokens_per_call ?? '—'}</td><td class="${r.s.errors ? 'err' : ''}">${r.s.errors || 0}${r.s.skipped ? `<br><small class="${r.s.unscored_rate > 0.2 ? 'err' : 'hint'}" title="网络、服务商故障或限流，不算模型答错">未计分 ${r.s.skipped} 题</small>` : ''}</td></tr>`).join('')}
     </tbody></table>
     <details><summary>查看每道题的得分、分项和扣分原因</summary>
     <table><thead><tr><th>模型</th><th>题目</th><th>得分</th><th>分项</th><th>说明</th></tr></thead><tbody>
     ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${caseStats[x.task]?.saturated ? ' <span class="tag">饱和</span>' : ''}${x.rep ? ` #${x.rep + 1}` : ''}</td>
-      <td class="${x.error ? 'err' : ''}">${x.skipped ? '限流未计分' : x.error ? '失败' : Math.round(x.score)}</td>
+      <td class="${x.error ? 'err' : ''}">${x.skipped ? (x.skip_reason === 'service' ? '故障未计分' : '限流未计分') : x.error ? '失败' : Math.round(x.score)}</td>
       <td class="hint" style="font-size:12px">${esc(parts(x.parts))}</td>
       <td>${x.dimension === 'image' && x.answer ? `<img src="${x.answer}" style="height:60px;border-radius:4px">` : ''} ${esc((x.notes || []).join('；') || '全部达标')}</td></tr>`).join('')}
     </tbody></table></details>
-    ${outlinePw.length ? `<details><summary>查看大纲两两评审（${pairCounts.text ?? outlinePw.length} 组，每组正反各问一次）</summary>${pairTable(outlinePw)}</details>` : ''}
-    ${layoutPw.length ? `<details><summary>查看排版视觉评审（${pairCounts.layout ?? layoutPw.length} 组，每组正反各问一次）</summary>${pairTable(layoutPw)}</details>` : ''}`;
+    ${outlineJ.length ? `<details><summary>查看大纲对比参考答案评审（${jCounts.text ?? outlineJ.length} 份，每份正反各问一次）</summary>${judgeTable(outlineJ)}</details>` : ''}
+    ${layoutJ.length ? `<details><summary>查看排版截图对比参考答案评审（${jCounts.layout ?? layoutJ.length} 份，每份正反各问一次）</summary>${judgeTable(layoutJ)}</details>` : ''}`;
 }
 
 // ---------- deck

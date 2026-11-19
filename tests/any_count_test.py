@@ -2,7 +2,8 @@
 
 Uses offline mock models, so it needs no network or key. For 1, 2 and 6 models (plus one model
 that cannot connect) it checks that the run finishes, that the judging mechanism fits the count,
-and that no model ever judges its own answer.
+that no model ever judges its own answer, and that
+scores and routing agree with the leaderboard.
 """
 from __future__ import annotations
 
@@ -37,35 +38,37 @@ broken = config.upsert_model({"id": "broken", "name": "连不上", "protocol": "
 quiet = lambda msg: None  # noqa: E731
 dims = ["text", "layout"]
 
-for n, expect in ((1, None), (2, None), (6, "third_party")):
+for n, expect in ((1, "none"), (2, "anchored"), (6, "anchored")):
     ids = [m["id"] for m in models[:n]] + [broken["id"]]
     plan = benchmark.plan(ids, dims=dims)
     check(plan["models"] == n + 1 and plan["lines"], f"{n} 个模型：开测前给出测试计划")
     r = benchmark.run(ids, progress=quiet, dims=dims)
     check(sorted(r["scores"]) == sorted(ids[:n]) and [x["id"] for x in r["excluded"]] == ["broken"],
           f"{n} 个模型：一键跑完，连不上的模型自动排除")
-    modes = r["pairwise"]["modes"]
-    log = r["pairwise"]["log"]
-    if expect is None:
-        check(not log and modes.get("text", "none") == "none" and modes.get("layout", "none") == "none",
-              f"{n} 个模型：没有组外裁判，只按规则评分，不做两两评审")
-        if n == 1:
-            check(r["scores"]["m0"]["dims"]["text"]["rank"] == "only", "1 个模型：不标第一")
+    modes = r["judging"]["modes"]
+    log = r["judging"]["log"]
+    check(modes.get("text") == expect and modes.get("layout") == expect, f"{n} 个模型：评审方式为 {expect}")
+    if expect == "none":
+        check(not log and r["scores"]["m0"]["dims"]["text"]["rank"] == "only", "1 个模型：只按规则评分，不标第一")
         continue
-    check(modes.get("text") == expect and modes.get("layout") == expect and r["pairwise"]["judged"] > 0,
-          f"{n} 个模型：评审方式为 {expect}，完成 {r['pairwise']['judged']} 组")
-    check(all(x["judge"] not in (x["a"], x["b"]) for x in log), f"{n} 个模型：模型不会评自己")
-    per_model = Counter(m for x in log if x["kind"] == "outline" for m in (x["a"], x["b"]))
-    check(len(per_model) == n and max(per_model.values()) - min(per_model.values()) <= 2,
-          f"{n} 个模型：每个模型被比较的次数均衡 {dict(per_model)}")
+    check(all(x["judge"] != x["model"] for x in log), f"{n} 个模型：没有模型评自己的答案")
+    per_model = Counter(x["model"] for x in log)
+    check(len(per_model) == n and len(set(per_model.values())) == 1,
+          f"{n} 个模型：每个模型的每份大纲和排版都对比了参考答案 {dict(per_model)}")
     load = Counter(x["judge"] for x in log)
-    check(max(load.values()) - min(load.values()) <= 3, f"{n} 个模型：评审工作量平摊 {dict(load)}")
+    check(max(load.values()) - min(load.values()) <= 1, f"{n} 个模型：评审工作量平摊 {dict(load)}")
+    for dim in ("text", "layout"):
+        chosen = benchmark.route(dim, models[:n])["id"]
+        check(r["scores"][chosen]["dims"][dim]["rank"] in ("leader", "tied"),
+              f"{n} 个模型：做 PPT 时「{dim}」交给的模型在排行榜上不是“落后”")
 
-# two contestants plus a model that only judges: third-party review comes back
-r = benchmark.run(["m0", "m1"], judge_ids=["m0", "m1", "m5"], progress=quiet, dims=["text"])
-log = r["pairwise"]["log"]
-check(r["pairwise"]["modes"]["text"] == "third_party" and log and all(x["judge"] == "m5" for x in log),
-      "2 个模型 + 指定外部裁判：由外部裁判做两两评审")
+# a model's score does not depend on who else is in the run (same answers, same judge verdicts)
+config.upsert_model({"id": "judge", "name": "裁判", "protocol": "mock", "model": "mock",
+                     "mock_skill": {"default": 0.7, "slowness": 0}})
+with_strong = benchmark.run(["m0", "m5"], judge_ids=["judge"], progress=quiet, dims=dims)["scores"]["m0"]["dims"]
+with_weak = benchmark.run(["m0", "m1"], judge_ids=["judge"], progress=quiet, dims=dims)["scores"]["m0"]["dims"]
+check(all(with_strong[d]["score"] == with_weak[d]["score"] for d in dims),
+      f"同一模型和强对手、弱对手同场，分数相同 {[with_strong[d]['score'] for d in dims]}")
 
 print("\n全部通过" if not FAILED else f"\n{len(FAILED)} 项失败")
 sys.exit(1 if FAILED else 0)

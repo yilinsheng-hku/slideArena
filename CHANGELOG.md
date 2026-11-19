@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- One-click benchmarking now works for any number of models: rule scores only for one or two models (no self-judging), third-party pairwise review for three or more.
-- Pairwise review uses balanced, rotating pairings and least-loaded judges, so each model's review cost stays flat as the number of models grows.
+- One-click benchmarking now works for any number of models.
+- Outlines and layouts are now reviewed blind against the hand-checked reference answer by another model, instead of pairwise between models. Scores no longer depend on which other models are in the run, review cost per model is constant, and two models can review each other without self-judging. Matching the reference leaves the rule score unchanged; beating or losing to it moves a judged task by 12.5 points.
+- "Tied" / "behind" now come from one Westfall–Young permutation test over all pairs. The old per-pair test against the leader wrongly reported someone "behind" in about 90% of runs with 10 equally good models; the new test stays near 10%.
+- Network timeouts, dropped connections, and provider errors are no longer scored as wrong answers; they are reported as unscored. Models with more than 20% unscored tasks are flagged and skipped by routing.
+- Routing now uses the same test as the leaderboard, so it never picks a model the leaderboard marks as behind.
 - Models that fail a connection check are excluded before the run and listed on the leaderboard.
 - Added a run plan (calls and review method) in the web app, `POST /api/benchmark/plan`, and before `slidearena bench`.
 - Added a "benchmark all models" button on the models page.

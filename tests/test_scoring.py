@@ -244,13 +244,44 @@ check(case_spread[0]["range"] == 4 and case_spread[0]["stdev"] == 2 and not case
       "题目区分度包含极差、标准差和饱和标记")
 
 # ---------------------------------------------------------------- 4. statistics
-check(T.separable([90, 95, 92, 94, 96], [70, 72, 75, 71, 73]) == 1, "明显差距被判定为有差别")
-check(T.separable([90, 60, 100, 80], [85, 70, 95, 90]) == 0, "噪声范围内的差距判定为并列")
-elo = T.bradley_terry(["A", "B", "C"], {("A", "B"): 7, ("B", "A"): 3, ("A", "C"): 9, ("C", "A"): 1,
-                                        ("B", "C"): 6, ("C", "B"): 4})
-check(elo["A"] > elo["B"] > elo["C"], f"Bradley-Terry 排序正确 {elo}")
-check(abs(sum(T.win_rate_to_points(elo).values()) / 3 - 50) < 1, "两两评审换算后平均 50 分，不整体抬高或压低")
+flags = T.behind_flags({"a": dict(zip("pqrstu", [90, 95, 92, 94, 96, 93])),
+                        "b": dict(zip("pqrstu", [70, 72, 75, 71, 73, 74]))})
+check(flags == {"a": False, "b": True}, "明显差距被判定为落后")
+flags = T.behind_flags({"a": dict(zip("pqrs", [90, 60, 100, 80])), "b": dict(zip("pqrs", [85, 70, 95, 90]))})
+check(not any(flags.values()), "噪声范围内的差距判定为并列")
+
+
+def _sim(n_models, n_cases, gap, rng):
+    difficulty = [rng.uniform(60, 100) for _ in range(n_cases)]
+    shift = [0.0] * n_models
+    shift[-1] = -gap                                  # the last model is truly worse by `gap`
+    return {f"m{i}": {f"c{c}": min(100, difficulty[c] + shift[i] + rng.gauss(0, 8)) for c in range(n_cases)}
+            for i in range(n_models)}
+
+
+# The old per-pair test wrongly called someone "behind" in ~90% of runs with 10 equal models.
+# The joint test must stay near its 10% level however many models and cases there are.
+rng = random.Random(3)
+for n_models, n_cases in ((2, 7), (5, 12), (10, 12)):
+    false = sum(any(T.behind_flags(_sim(n_models, n_cases, 0, rng), n=300).values()) for _ in range(60))
+    power = sum(T.behind_flags(_sim(n_models, n_cases, 15, rng), n=300)[f"m{n_models - 1}"] for _ in range(30))
+    check(false / 60 <= 0.2 and power / 30 >= 0.7,
+          f"{n_models} 个模型 {n_cases} 道题：实力相同误判落后 {false / 60:.0%}（≤20%），差 15 分检出 {power / 30:.0%}（≥70%）")
 check(benchmark._parse_winner('{"winner": "B", "reason": "更具体，数字准') == "B", "评审回复被截断时仍能读出胜者")
+
+# judging against the reference keeps one scale whoever else is in the run
+mine = [{"model_id": "m", "task": t, "dimension": "text", "kind": "outline", "rep": 0, "score": s_,
+         "error": None, "latency": 2.0, "in_tokens": 1, "out_tokens": 1} for t, s_ in (("x", 80.0), ("y", 90.0))]
+other = [{**r, "model_id": "o", "score": 40.0} for r in mine]
+judged = {"text": {"results": {"m": {"x": 100.0, "y": 50.0}, "o": {"x": 0.0, "y": 0.0}}}}
+alone = benchmark.summarize(mine, [{"id": "m"}], {"text": {"results": {"m": {"x": 100.0, "y": 50.0}}}})["m"]["dims"]["text"]
+paired = benchmark.summarize(mine + other, [{"id": "m"}, {"id": "o"}], judged)["m"]["dims"]["text"]
+check(alone["score"] == paired["score"] == 91.2 and alone["cases"] == {"x": 92.5, "y": 90.0},
+      f"对比参考答案：胜过 +12.5、持平不变，分数与同场对手无关（{alone['score']} / {paired['score']}）")
+check(alone["rule_score"] == 85 and alone["vs_reference"] == 75, "同时保留规则分和对比参考答案的得分")
+check(benchmark.judging_mode(["a"], ["a"]) == "none", "1 个模型：没有其他裁判，只按规则评分")
+check(benchmark.judging_mode(["a", "b"], ["a", "b"]) == "anchored", "2 个模型：互为裁判对比参考答案，不评自己")
+check(benchmark.judging_mode(["a", "b"], ["a"]) == "partial", "某个模型找不到其他裁判时只对它按规则评分")
 
 # ---------------------------------------------------------------- 4b. rate limits are not model failures
 
@@ -267,28 +298,22 @@ row = benchmark.summarize(recs, [{"id": "m"}])["m"]
 check(row["dims"]["chart"]["score"] == 100 and row["skipped"] == 1 and row["errors"] == 0,
       "限流跳过的题不计 0 分，也不算模型失败")
 
-# ---------------------------------------------------------------- 4b. any number of models
-import itertools as _it  # noqa: E402
-from collections import Counter  # noqa: E402
+# ---------------------------------------------------------------- 4c. network failures are not wrong answers
+_real_chat = llm.chat
 
-check(benchmark.schedule_pairs(["a"]) == [] and benchmark.schedule_pairs([]) == [], "1 个模型：没有可比的配对")
-check(benchmark.schedule_pairs(["a", "b"]) == [("a", "b")], "2 个模型：唯一一组")
-check(len(benchmark.schedule_pairs(list("abcd"))) == 6, "4 个以内：全部组合都比")
-for n in (5, 6, 9, 12):
-    ids = [f"m{i}" for i in range(n)]
-    balanced, covered = True, set()
-    for case_index in range(n):
-        pairs = benchmark.schedule_pairs(ids, case_index)
-        counts = Counter(x for pr in pairs for x in pr)
-        balanced &= len(set(counts.values())) == 1 and set(counts) == set(ids)
-        covered |= set(pairs)
-    check(balanced and covered == set(_it.combinations(sorted(ids), 2)),
-          f"{n} 个模型：每道题每个模型比较次数相同，轮换后覆盖全部 {n * (n - 1) // 2} 组")
-check(benchmark.judging_mode(["a"], ["a"]) == "none", "1 个模型：只按规则评分")
-check(benchmark.judging_mode(["a", "b"], ["a", "b"]) == "none", "2 个模型、没有外部裁判：只按规则评分，不自评")
-check(benchmark.judging_mode(list("abc"), ["a", "b"]) == "partial", "只有 2 个裁判可用时，没有组外裁判的组被跳过")
-check(benchmark.judging_mode(["a", "b"], ["a", "b", "j"]) == "third_party", "2 个模型 + 外部裁判：第三方评审")
-check(benchmark.judging_mode(list("abc"), list("abc")) == "third_party", "3 个模型：互相当第三方裁判")
+
+def _broken_chat(*args, **kwargs):
+    raise llm.ServiceError("请求超时或连接中断: timed out")
+
+
+llm.chat = _broken_chat
+try:
+    rec = benchmark._run_one({"id": "m", "name": "m"}, "chart", "chart", C.CHART[0], 0)
+finally:
+    llm.chat = _real_chat
+check(rec.get("skipped") and rec.get("skip_reason") == "service" and not rec["error"],
+      "网络超时 / 服务商故障的题不计分，不算模型答错")
+check(issubclass(llm.RateLimited, llm.ServiceError), "限流也归为服务端问题")
 one = benchmark.summarize([{**recs[0], "dimension": "text", "kind": "outline"}], [{"id": "m"}])["m"]
 check(one["dims"]["text"]["rank"] == "only", "单个模型不标\"第一\"")
 

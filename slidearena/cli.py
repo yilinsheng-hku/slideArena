@@ -74,22 +74,22 @@ def print_board(r: dict) -> None:
             cells.append(_pad(f"{mark}{x['score']:.0f} {ci}", 16))
         print(_pad(names[mid], width) + "".join(cells)
               + _pad(f"{row['median_latency'] or '-'}s", 10) + _pad(str(row["tokens_per_call"]), 10) + str(row["errors"])
-              + (f"（另有 {row['skipped']} 题因限流未计分）" if row.get("skipped") else ""))
+              + (f"（另有 {row['skipped']} 题因网络/限流未计分）" if row.get("skipped") else ""))
     for x in r.get("excluded") or []:
         print(_pad(x["name"], width) + f"连接失败，未参加测试：{x['error'][:80]}")
     if len(r["scores"]) == 1:
-        print("\n只测了 1 个模型：以上是相对题库的绝对分，没有排名和两两评审。   [a-b] 90% 置信区间")
+        print("\n只测了 1 个模型：以上是相对题库的绝对分，没有排名。   [a-b] 90% 置信区间")
     else:
-        print("\n* 该项第一   ~ 与第一的差距在统计误差内（视为并列）   [a-b] 90% 置信区间")
-    pw = r.get("pairwise", {})
-    if pw.get("judged"):
-        by = pw.get("by_dim") or {"text": pw["judged"]}
-        parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 组" for d, n in by.items() if n]
-        print(f"两两评审：{'，'.join(parts)}（每组正反各问一次，计入该项 25%）")
+        print("\n* 该项第一   ~ 没有明显落后于任何模型（视为并列）   无标记 = 明显落后于至少一个模型   [a-b] 90% 置信区间")
+    jd = r.get("judging", {})
+    if jd.get("judged"):
+        parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 份" for d, n in (jd.get("by_dim") or {}).items() if n]
+        print(f"对比参考答案评审：{'，'.join(parts)}（另一个模型盲评，正反各问一次；"
+              f"与参考答案持平不加不减，胜过/不如各影响该题 {jd.get('weight', 0.25) * 50:.1f} 分）")
     case_stats = r.get("case_stats", [])
     if case_stats:
         print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")
-        print("注：数据图表类题目对顶级模型区分度有限，所有模型均满分时排版和大纲的两两评审承担主要区分功能。")
+        print("注：数据图表类题目对顶级模型区分度有限，所有模型均满分时主要靠大纲和排版的参考答案对比拉开差距。")
 
 
 def cmd_bench(a):
@@ -139,7 +139,7 @@ def main(argv=None):
     b = sub.add_parser("bench", help="运行能力测试")
     b.add_argument("models", nargs="*", help="模型 id（默认全部）")
     b.add_argument("-r", "--repeats", type=int, default=1, help="每道题重复几次（模型输出有随机性，重复越多越准）")
-    b.add_argument("--no-judge", action="store_true", help="跳过两两对比评审，只用规则评分")
+    b.add_argument("--no-judge", action="store_true", help="跳过与参考答案的对比评审，只用规则评分")
     b.add_argument("--no-visual", action="store_true", help="跳过排版截图的视觉评审")
     b.add_argument("--only", nargs="+", choices=["text", "layout", "chart", "image"],
                    help="只测这些维度，例如 --only layout")

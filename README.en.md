@@ -79,26 +79,28 @@ Some wrong figures appear in the source, such as an earlier corrected draft or a
 
 Reasoning models may spend output tokens before writing their answer, so each task allows up to 12,000 output tokens. Truncated output is reported explicitly. When making a PPT, unsupported outline numbers trigger one rewrite; unsupported bullets are removed if the rewrite still fails the check.
 
-### Pairwise Review
+### Review Against the Reference
 
-Rules can check formats and numbers, but not which outline tells a better story. A reviewer model compares two outlines; who reviews depends on how many models take part (see below). The reviewer sees both A/B orders; only matching verdicts count as a win, while inconsistent verdicts are ties. Bradley–Terry scores summarize the results, which contribute 25% of the outline score without changing the overall average.
+Rules can check formats and numbers, but not which outline tells a better story. So each outline is also shown, blind, next to the task's hand-checked reference answer to **another model**. The reviewer sees only "A" and "B", not which is the reference, and is asked again with the order swapped; only matching verdicts count, otherwise it is a tie.
+
+The verdict only moves that task's score: beating the reference adds 12.5 points (capped at 100), a tie changes nothing, and losing subtracts 12.5, so the review decides 25% of a judged task. The leaderboard shows both the rule score and the reference comparison (50 = as good as the reference).
+
+Why compare with the reference instead of pairing models: the reference is a fixed yardstick, so **a model's score does not depend on who else is in the run** and results from different runs and users can be compared; each model costs 2 review calls per task whatever the number of models; and two models can review each other without anyone judging its own answer.
 
 ### Any Number of Models
 
-You do not need a fixed number of models. The review method adapts to how many take part:
+You do not need a fixed number of models:
 
-| Models | Pairwise review |
+| Models | Review |
 |---|---|
-| 1 | Nothing to compare: rule scores only. The leaderboard shows absolute scores (reference answer = 100) and no "leader". |
-| 2 | No third model can judge, so pairwise review is skipped and scores are rule-based (models never judge themselves). Pairwise review is only 25% of a dimension; rule scores still decide the ranking. |
-| 3 or more | Each pair is reviewed by a model outside it, so no model judges itself. Reviews go to the least-loaded judge first. |
-| 5 or more | Each task compares one **balanced round** of pairs (every model 1–2 times), rotating across tasks so the bank covers every pair. Each model's review cost stays flat as the number of models grows. |
+| 1 | No other model can judge: rule scores only. The leaderboard shows absolute scores (reference answer = 100) and no "leader". |
+| 2 or more | Each answer is compared with the reference by another model; reviews go to the least-loaded judge, and no model judges itself. |
 
 Before a run, every model's connection is checked in parallel. Unreachable models are left out and listed on the leaderboard, so one wrong key does not slow down the whole run. The web app shows the planned calls and review method as you pick models; `slidearena bench` prints the same plan first.
 
 ### Layout Screenshot Review
 
-Rules can check bounds, overlaps, and text fit, but not visual quality. SlideArena renders each model's coordinates and font sizes into a 960×540 screenshot, wraps text at its font size, marks text that fails the shared fit rule in red, and draws charts as placeholder bars. A third-party vision model compares two screenshots in both orders. The result contributes 25% of the layout score. Set `"vision": false` in a model's configuration to exclude it from visual review.
+Rules can check bounds, overlaps, and text fit, but not visual quality. SlideArena renders each model's coordinates and font sizes into a 960×540 screenshot, wraps text at its font size, marks text that fails the shared fit rule in red, and draws charts as placeholder bars. Another vision model compares it, blind and in both orders, with a screenshot of the reference layout, scored as above. Set `"vision": false` in a model's configuration to exclude it from visual review.
 
 ```bash
 slidearena bench --only layout      # benchmark only layout, including screenshot review
@@ -114,23 +116,28 @@ slidearena bench --no-visual        # skip screenshot review
 
 On HTTP 429 responses, SlideArena reads the provider's RPM and concurrency limits when available, queues retries, and excludes queue time from model latency. You can also set `"rpm": 3, "max_concurrency": 2` in a model configuration. Tasks that remain rate-limited are recorded as unscored rather than zero; a different reviewer is tried if a judge is rate-limited.
 
+Network timeouts, dropped connections, and provider 5xx errors are treated the same way: after 3 retries the task is recorded as unscored, not as a wrong answer. Only the model's own problems (invalid JSON, truncated output, wrong answers) lose points. If more than 20% of a model's tasks go unscored, the leaderboard flags it and routing skips it.
+
 ### Confidence
 
 - Use `-r 3` to repeat tasks and average each task's results.
 - Every score includes a 90% confidence interval computed by bootstrap resampling across cases.
-- Scores within the statistical margin of the leader are marked tied.
+- "Tied" and "behind" come from one permutation test over **all models and all pairs at once** (Westfall–Young max-T: shuffle model labels within each task and see how large the biggest pairwise gap gets). A model is "behind" only when it is clearly worse than at least one other model.
 
-Chart tasks mainly screen out models with weaker chart skills and offer limited separation among top models. When every model scores perfectly on these tasks, outline pairwise reviews and visual layout reviews provide most of the distinction.
+Why not compare each model with the leader: the leader is the highest of several noisy scores, and the number of comparisons grows with the number of models. In simulation, with 10 equally good models that approach wrongly reported someone "behind" in about 90% of runs; the current test stays near 10% for 2–10 models and 7–30 tasks (`tests/test_scoring.py` re-runs this simulation).
+
+Chart tasks mainly screen out models with weaker chart skills and offer limited separation among top models. When every model scores perfectly on these tasks, the reference comparisons for outlines and layouts provide most of the distinction.
 
 ### Model Routing
 
-For each kind of work, routing first keeps models statistically tied with the leader and with a failure rate below 20%. Among those, it considers score, token cost, and latency. You can prefer quality, low cost, or speed. When two models both score perfectly, the cheaper or faster one wins rather than an arbitrary choice.
+For each kind of work, routing first keeps models that the leaderboard does not mark as behind (the same test, so the two always agree) and whose failure and unscored rates are below 20%. Among those, it considers score, token cost, and latency. You can prefer quality, low cost, or speed. When two models both score perfectly, the cheaper or faster one wins rather than an arbitrary choice.
 
 ## Current Limitations
 
 - Image tests check whether generation succeeds; they do not assess image quality.
 - Layout screenshots use a simplified renderer and do not represent PowerPoint's actual rendering.
-- Review models can have preferences. Reversed prompts and a third-party judge reduce position and self-review bias but cannot eliminate subjectivity.
+- Review models can have preferences. Blind review, reversed prompts, and never judging one's own answer reduce bias but cannot eliminate subjectivity. Judges differ in strictness, which matters more with few models (for example two models reviewing each other).
+- Beating the reference is capped at full marks: when several top models score perfectly and all beat the reference, they cannot yet be told apart; that needs harder tasks.
 - The task bank currently has 31 tasks, including 6 hard tasks with unit traps, two-step calculations, multi-series charts, strict word limits, and tight layouts, plus 2 outline-revision tasks; it is still focused mainly on Chinese business scenarios.
 
 ## Privacy
@@ -152,8 +159,8 @@ slidearena/
   scoring.py    Deterministic scorers and explanations
   facts.py      Number checking, unit conversions, and precision tolerances
   render.py     Render layout answers for visual review
-  stats.py      Bootstrap intervals, tie detection, and Bradley–Terry ratings
-  benchmark.py  Benchmark runs, pairwise reviews, profiles, and routing
+  stats.py      Bootstrap intervals and the all-pairs permutation test for tied / behind
+  benchmark.py  Benchmark runs, reviews against the reference, profiles, and routing
   deck.py       Route outline/chart/image work and create editable PPT files with python-pptx
   server.py     Local web server and API
   static/       Web interface

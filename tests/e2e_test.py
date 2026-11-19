@@ -106,8 +106,8 @@ def main() -> int:
             assert leaderboard_rows.count() == 3, "排行榜不是 3 行"
             board = page.locator("#board").inner_text()
             assert "区间" in board, "排行榜缺少置信区间"
-            assert "大纲两两评审" in board, "排行榜缺少大纲评审记录"
-            assert "排版视觉评审" in board, "排行榜缺少排版视觉评审记录"
+            assert "大纲对比参考答案评审" in board, "排行榜缺少大纲评审记录"
+            assert "排版截图对比参考答案评审" in board, "排行榜缺少排版截图评审记录"
 
             page.locator('button[data-tab="deck"]').click()
             page.locator("#brief").fill("给管理层做一份离线演示季度复盘，说明营收趋势、问题和下一步计划")

@@ -42,7 +42,13 @@ PRESETS = [
 
 
 class ModelError(Exception):
-    pass
+    """The call did not produce a usable answer."""
+
+
+class ServiceError(ModelError):
+    """The provider or the network failed (timeout, dropped connection, HTTP error, malformed
+    envelope), after retries. This says nothing about the model's ability, so the benchmark
+    leaves such calls out of the score and reports them, instead of counting 0."""
 
 
 @dataclass
@@ -57,7 +63,7 @@ class Reply:
 RETRY_HTTP = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524}
 
 
-class RateLimited(ModelError):
+class RateLimited(ServiceError):
     """The provider kept refusing because of the account's rate limit. This says nothing about the
     model's ability, so the benchmark leaves such calls out of the score instead of counting 0."""
 
@@ -156,15 +162,15 @@ def _post(url: str, headers: dict, body: dict, timeout: float, retries: int = 3,
                 limited += 1
                 last = RateLimited(f"HTTP 429（账号限流，已重试 {limited} 次）: {detail}")
                 continue
-            last = ModelError(f"HTTP {e.code}: {detail}")
+            last = ServiceError(f"HTTP {e.code}: {detail}")
             if e.code not in RETRY_HTTP:
                 raise last from None
         except urllib.error.URLError as e:
-            last = ModelError(f"连接失败: {e.reason}")
+            last = ServiceError(f"连接失败: {e.reason}")
         except (TimeoutError, ConnectionError, OSError) as e:
-            last = ModelError(f"请求超时或连接中断: {e}")
+            last = ServiceError(f"请求超时或连接中断: {e}")
         except json.JSONDecodeError:
-            raise ModelError("返回内容不是 JSON") from None
+            raise ServiceError("返回内容不是 JSON") from None
         finally:
             gate.release()
         attempt += 1
@@ -197,7 +203,7 @@ def chat(model: dict, prompt: str, system: str = "", images: list[str] | None = 
     key = config.resolve_key(model.get("api_key"))
     base = (model.get("base_url") or "").rstrip("/")
     if not base:
-        raise ModelError("没有填写 base_url")
+        raise ServiceError("没有填写 base_url")
 
     if protocol == "anthropic":
         body = {"model": model["model"], "max_tokens": max_tokens, "temperature": temperature,
@@ -240,7 +246,7 @@ def chat(model: dict, prompt: str, system: str = "", images: list[str] | None = 
     try:
         text = data["choices"][0]["message"].get("content") or ""
     except (KeyError, IndexError):
-        raise ModelError(f"返回格式异常: {json.dumps(data, ensure_ascii=False)[:300]}") from None
+        raise ServiceError(f"返回格式异常: {json.dumps(data, ensure_ascii=False)[:300]}") from None
     if isinstance(text, list):  # some providers return content parts
         text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     usage = data.get("usage") or {}
@@ -263,8 +269,11 @@ def generate_image(model: dict, prompt: str, size: str = "1536x1024", timeout: f
     if item.get("b64_json"):
         return base64.b64decode(item["b64_json"]), time.time() - t0
     if item.get("url"):
-        with urllib.request.urlopen(item["url"], timeout=timeout) as r:
-            return r.read(), time.time() - t0
+        try:
+            with urllib.request.urlopen(item["url"], timeout=timeout) as r:
+                return r.read(), time.time() - t0
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            raise ServiceError(f"下载生成的图片失败: {e}") from None
     raise ModelError("图片接口没有返回图片")
 
 
