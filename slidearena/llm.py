@@ -198,7 +198,7 @@ def chat(model: dict, prompt: str, system: str = "", images: list[str] | None = 
     protocol = model.get("protocol", "openai")
     t0 = time.time()
     if protocol == "mock":
-        return _mock_chat(model, prompt, system, t0)
+        return _mock_chat(model, prompt, system, t0, images)
 
     key = config.resolve_key(model.get("api_key"))
     base = (model.get("base_url") or "").rstrip("/")
@@ -310,15 +310,44 @@ def _rng(model: dict, prompt: str) -> random.Random:
 def _mock_case(prompt: str):
     """Find which benchmark case a prompt belongs to (demo models answer from the reference)."""
     from . import cases as C
-    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
+    from .generate import REGISTRY
+    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT, list(REGISTRY.values())):
         for c in bank:
-            key = c.get("material") or c.get("desc")
-            if key and key in prompt:
+            if C.matches_prompt(c, prompt):
                 return c
     return None
 
 
-def _mock_chat(model: dict, prompt: str, system: str, t0: float) -> Reply:
+def _red_pixels(data_url: str) -> int:
+    """Overflowing text is drawn in red by render.py; count it."""
+    import io
+
+    from PIL import Image
+    img = Image.open(io.BytesIO(base64.b64decode(data_url.split(",", 1)[1]))).convert("RGB")
+    pixels = img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata()
+    return sum(1 for r, g, b in pixels if r > 180 and r - g > 60 and r - b > 60)
+
+
+def _mock_verdict(task: str, prompt: str, images, rng: random.Random, accuracy: float) -> str:
+    """A demo judge with real (if simple) judgement: fewer invented numbers wins for outlines,
+    less overflowing text wins for layouts. With probability 1 - accuracy it guesses."""
+    if rng.random() > accuracy:
+        return rng.choice(["A", "B", "tie"])
+    if task == "visual_pairwise" and images and len(images) == 2:
+        bad = [_red_pixels(u) for u in images]
+    else:
+        from . import facts
+        m = re.search(r"需求与资料：\s*(.*?)【大纲 A】(.*?)【大纲 B】(.*?)只输出", prompt, re.S)
+        if not m:
+            return "tie"
+        src = facts.Source(m.group(1))
+        bad = [len(src.unsupported(m.group(2))), len(src.unsupported(m.group(3)))]
+    if abs(bad[0] - bad[1]) <= (20 if task == "visual_pairwise" else 0):
+        return "tie"
+    return "A" if bad[0] < bad[1] else "B"
+
+
+def _mock_chat(model: dict, prompt: str, system: str, t0: float, images=None) -> Reply:
     """A fake model that starts from the reference answer and makes realistic mistakes.
     mock_skill[task] (0-1) is the chance of getting each part right."""
     import copy
@@ -374,7 +403,8 @@ def _mock_chat(model: dict, prompt: str, system: str, t0: float) -> Reply:
                 e["font_size"] = rng.choice([10, 48])
         out = json.dumps(ans, ensure_ascii=False)
     elif task in ("pairwise", "visual_pairwise"):
-        out = json.dumps({"winner": rng.choice(["A", "A", "B", "tie"]), "reason": "演示评审"})
+        out = json.dumps({"winner": _mock_verdict(task, prompt, images, rng, float(skill.get("judge", 0.9))),
+                          "reason": "演示评审"})
     elif task == "fix":
         out = json.dumps({"bullets": ["详见资料"]}, ensure_ascii=False)
     elif task == "chart":                                    # deck building: use numbers in the brief

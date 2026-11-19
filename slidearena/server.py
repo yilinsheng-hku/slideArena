@@ -187,10 +187,14 @@ class Handler(BaseHTTPRequestHandler):
             visual = body.get("visual", True)
             if not isinstance(visual, bool):
                 return self._json({"error": "visual must be a boolean"}, 400)
+            seed = body.get("seed", "auto")
+            if seed is not None and (not isinstance(seed, str) or not re.fullmatch(r"[\w.-]{1,40}", seed)):
+                return self._json({"error": "seed must be a short string, or null for the hand-checked bank only"}, 400)
             if p == "/api/benchmark/plan":
-                return self._json(benchmark.plan(ids, repeats=reps, dims=dims, visual=visual))
+                return self._json(benchmark.plan(ids, repeats=reps, dims=dims, visual=visual, seed=seed))
             return self._json({"job": _start_job(
-                "benchmark", lambda pr: benchmark.run(ids, progress=pr, repeats=reps, dims=dims, visual=visual))})
+                "benchmark", lambda pr: benchmark.run(ids, progress=pr, repeats=reps, dims=dims, visual=visual,
+                                                      seed=seed))})
         if p == "/api/deck":
             brief = (body.get("brief") or "").strip()
             if not brief:

@@ -53,7 +53,14 @@ Test date: 2026-11-16 11:07:53; task bank: 2026.11-b (28 tasks, 6 hard); repeats
 
 ## What It Tests
 
-The bank currently has 31 tasks, including 6 marked hard, each with a human-checked reference answer. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
+Each run uses the **31-task hand-checked bank** (6 marked hard, each with a human-checked reference answer) plus **this week's 10 generated tasks**. Run `slidearena selftest` to make sure the scorer awards every reference answer 100 points; this guards against false penalties.
+
+### Generated Tasks
+
+The bank is public, so fixed tasks can be memorised or tuned against. Each run therefore adds 10 tasks built from templates: 5 charts (unit conversion, shares from counts, year-over-year growth, a sorted sub-range of months, two-step margins), 2 condensations (with a "percentage points" trap; one with a strict length limit), and 3 layouts (3/4/6 cards, a 4–6 step timeline, text with an image). Numbers, names, distractors, and layouts are random; reference answers are computed in code.
+
+- **Reliable**: before a generated task is used, the real scorer must give its reference answer 100, otherwise the task is drawn again. Tests check 200 batches (2,000 tasks) and verify that common mistakes (unconverted units, counts used as shares, missing sort, cost ratio as margin, percentage points written as %, overflowing text) lose points.
+- **Comparable**: the default batch changes every ISO week (for example `2026-W47`), so everyone testing in the same week answers the same tasks. Use `--seed` to reproduce a batch, or `--no-fresh` for the hand-checked bank only.
 
 | Dimension | Tasks | What they test |
 |---|---|---|
@@ -84,6 +91,8 @@ Reasoning models may spend output tokens before writing their answer, so each ta
 Rules can check formats and numbers, but not which outline tells a better story. So each outline is also shown, blind, next to the task's hand-checked reference answer to **another model**. The reviewer sees only "A" and "B", not which is the reference, and is asked again with the order swapped; only matching verdicts count, otherwise it is a tie.
 
 The verdict only moves that task's score: beating the reference adds 12.5 points (capped at 100), a tie changes nothing, and losing subtracts 12.5, so the review decides 25% of a judged task. The leaderboard shows both the rule score and the reference comparison (50 = as good as the reference).
+
+**Judges are calibrated first**: before a model may judge, it compares 2 controls: a reference answer and a deliberately worse copy (invented numbers and missing key facts in an outline; overflowing text and overlapping blocks in a layout), blind and in both orders. A model that prefers the worse copy, or cannot tell them apart at all (for example it always picks the first), does not judge in that run. The leaderboard lists each judge's control results and how often it agreed with itself.
 
 Why compare with the reference instead of pairing models: the reference is a fixed yardstick, so **a model's score does not depend on who else is in the run** and results from different runs and users can be compared; each model costs 2 review calls per task whatever the number of models; and two models can review each other without anyone judging its own answer.
 
@@ -138,7 +147,7 @@ For each kind of work, routing first keeps models that the leaderboard does not 
 - Layout screenshots use a simplified renderer and do not represent PowerPoint's actual rendering.
 - Review models can have preferences. Blind review, reversed prompts, and never judging one's own answer reduce bias but cannot eliminate subjectivity. Judges differ in strictness, which matters more with few models (for example two models reviewing each other).
 - Beating the reference is capped at full marks: when several top models score perfectly and all beat the reference, they cannot yet be told apart; that needs harder tasks.
-- The task bank currently has 31 tasks, including 6 hard tasks with unit traps, two-step calculations, multi-series charts, strict word limits, and tight layouts, plus 2 outline-revision tasks; it is still focused mainly on Chinese business scenarios.
+- The hand-checked bank has 31 tasks, plus 10 generated tasks each week. Outline tasks are still fixed, hand-written tasks (reliable outline references are hard to generate), and the bank focuses mainly on Chinese business scenarios.
 
 ## Privacy
 
@@ -156,6 +165,7 @@ For each kind of work, routing first keeps models that the leaderboard does not 
 slidearena/
   llm.py        Model adapters (OpenAI-compatible, Anthropic, and offline demo); standard library only
   cases.py      Task bank, reference answers, and prompts
+  generate.py   Generated tasks: random cases, computed references, checked with the scorer
   scoring.py    Deterministic scorers and explanations
   facts.py      Number checking, unit conversions, and precision tolerances
   render.py     Render layout answers for visual review

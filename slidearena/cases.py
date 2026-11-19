@@ -656,5 +656,15 @@ def layout_elements_text(case: dict) -> str:
     return "\n".join(lines)
 
 
+def matches_prompt(case: dict, prompt: str) -> bool:
+    """Is this prompt about this case? Layout cases are matched on their element texts too,
+    because generated batches can share a description."""
+    if case.get("material"):
+        return case["material"] in prompt
+    if case.get("desc") and case["desc"] in prompt:
+        return "elements" not in case or layout_elements_text(case) in prompt
+    return False
+
+
 def outline_brief(case: dict) -> str:
     return f"{case['brief']}\n资料：{case['material']}"

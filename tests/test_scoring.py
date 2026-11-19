@@ -317,6 +317,61 @@ check(issubclass(llm.RateLimited, llm.ServiceError), "限流也归为服务端�
 one = benchmark.summarize([{**recs[0], "dimension": "text", "kind": "outline"}], [{"id": "m"}])["m"]
 check(one["dims"]["text"]["rank"] == "only", "单个模型不标\"第一\"")
 
+# ---------------------------------------------------------------- 4d. generated questions
+from slidearena import generate as G  # noqa: E402
+
+bad_refs = [(seed, c["id"]) for seed in (f"t{i}" for i in range(200)) for kind, cs in G.bank(seed).items()
+            for c in cs if {"chart": S.score_chart, "condense": S.score_condense,
+                            "layout": S.score_layout}[kind](c["reference"], c)[0] != 100]
+check(not bad_refs, f"参数化新题：200 个批次 × 10 道，参考答案全部满分 {bad_refs[:3]}")
+b1, b2, b3 = G.bank("same"), G.bank("same"), G.bank("other")
+check(b1 == b2 and b1["chart"][0]["material"] != b3["chart"][0]["material"], "同一批次的题完全相同，不同批次不同")
+check(G.default_seed(__import__("datetime").date(2026, 11, 19)) == "2026-W47", "默认批次按 ISO 周更换")
+gb = G.bank("mistakes")
+gc = {c["id"].split("-")[2]: c for c in gb["chart"]}
+
+
+def _chart_with(case, values=None, categories=None):
+    ans = copy.deepcopy(case["reference"])
+    if values is not None:
+        ans["series"][0]["values"] = values
+    if categories is not None:
+        ans["categories"] = categories
+    return S.score_chart(ans, case)[0]
+
+
+u = gc["units"]
+raw = [float(x.replace(",", "")) for x in __import__("re").findall(r"([\d,]+(?:\.\d+)?) (?:万元|亿元)", u["material"])[:4]]
+check(_chart_with(u, values=raw) < 100, "生成题：万元没有换算成亿元会扣分")
+sh = gc["share"]
+counts = [float(x) for x in __import__("re").findall(r"(\d+\.\d) 万", sh["material"])]
+check(_chart_with(sh, values=counts) <= 45, "生成题：把用户数当成占比会扣掉数值分")
+fs = gc["filter"]
+check(_chart_with(fs, categories=sorted(fs["categories"], key=lambda c: int(c[:-1]))) < 100, "生成题：没有按数值排序会扣分")
+mg = gc["margin"]
+check(_chart_with(mg, values=[100 - v for v in mg["values"]]) <= 45, "生成题：把成本率当成毛利率会扣掉数值分")
+cd = gb["condense"][0]
+pp = cd["wrong_patterns"][0][1].split(" ")[1]
+wrong = copy.deepcopy(cd["reference"])
+wrong["bullets"][2] = wrong["bullets"][2].replace(f"{pp}个百分点", f"{pp}%")
+check(S.score_condense(wrong, cd)[0] < 100, "生成题：把个百分点写成 % 会扣分")
+for lay in gb["layout"]:
+    check(S.score_layout(benchmark.degrade("layout", lay), lay)[0] < 90, f"生成题 {lay['id']}：文字溢出、元素重叠会扣分")
+
+# ---------------------------------------------------------------- 4e. judges are calibrated on controls
+for kind, scorer in (("outline", S.score_outline), ("layout", S.score_layout)):
+    worst = max(scorer(benchmark.degrade(kind, c), c)[0] for c in benchmark.control_cases(kind))
+    check(worst <= 85, f"对照题：故意改差的{'大纲' if kind == 'outline' else '排版'}明显更差（最高 {worst} 分）")
+_real_verdict = benchmark._verdict_pair
+behaviour = {"honest": ["A", "A"], "positional": ["A", "B"], "contrarian": ["B", "B"], "broken": None}
+benchmark._verdict_pair = lambda judge, *a: behaviour[judge["id"]]
+try:
+    cal = benchmark.calibrate([{"id": k, "name": k} for k in behaviour], "outline", lambda m: None)
+finally:
+    benchmark._verdict_pair = _real_verdict
+check(cal["honest"]["passed"] and not cal["positional"]["passed"] and not cal["contrarian"]["passed"]
+      and not cal["broken"]["passed"], "裁判校验：只有能分清好坏的裁判通过；总选同一位置、判反、调用失败的都不通过")
+
 # ---------------------------------------------------------------- 5. speed is log scale
 check(S.speed_score([3]) == 100 and S.speed_score([60]) == 0, "速度：3 秒满分，60 秒 0 分")
 check(abs((S.speed_score([6]) - S.speed_score([12])) - (S.speed_score([12]) - S.speed_score([24]))) < 0.5,

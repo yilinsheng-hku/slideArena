@@ -84,7 +84,7 @@
 <section id="bench">
   <div class="card">
     <h2>一键能力测试</h2>
-    <p class="hint">题库共 31 道题：写大纲 ×6、大纲改错 ×2、压缩成一页 ×4、从资料做图表 ×11、排版 ×7，并包含配图生成测试。
+    <p class="hint">每次测试 = 人工题库 31 道（写大纲 ×6、大纲改错 ×2、压缩成一页 ×4、从资料做图表 ×11、排版 ×7）+ 本周的 10 道<b>参数化新题</b>（图表 ×5、压缩 ×2、排版 ×3，数字、名称和版式每周更换，参考答案由程序算出并自检满分，无法提前背题），另有配图生成测试。
       全部题目都有人工核对过的参考答案，按规则自动判分，每个数字都会核对资料来源。<b>接入几个模型都能直接开测</b>：
       接入 2 个及以上模型时，大纲和排版还会<b>与人工参考答案盲比</b>，由另一个模型当裁判（不会评自己的答案），正反各问一次抵消位置偏差。
       参考答案是固定的标尺，所以分数不受同场对手影响，不同批次的结果可以直接比较；每个模型的评审开销固定，不随人数增长。
@@ -259,7 +259,7 @@ function drawBoard(b) {
     ${logs.map(p => `<tr><td>${esc(p.case)}</td><td>${esc(name(p.model))}</td><td>${esc(name(p.judge))}</td>
       <td>${esc((p.votes || []).map(voteText).join(' / '))}</td><td>${esc(RESULT[p.result] || p.result)}</td></tr>`).join('')}
     </tbody></table>`;
-  $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 题库 ${esc(b.bank_version || '—')} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
+  $('#board').innerHTML = `<p class="hint">测试时间 ${esc(b.time)} · 题库 ${esc(b.bank_version || '—')}${b.seed ? ` + 参数化新题 ${b.generated_count} 道（批次 ${esc(b.seed)}）` : ''} · 每题 ${b.repeats} 次 · 用时 ${b.duration}s ·
       ${single ? '' : '👑 该项第一 · <span class="tag">并列</span> 没有明显落后于任何模型 · 无标记 = 明显落后于至少一个模型 · '}区间为 90% 置信区间</p>
     ${single ? '<p class="hint">只测了 1 个模型：分数是相对题库的绝对分（参考答案 = 100），没有排名；也没有其他模型当裁判，只按规则评分。</p>' : ''}
     ${(b.excluded || []).length ? `<p class="err" style="font-size:13px">连接失败、未参加本次测试：${b.excluded.map(x => `<span title="${esc(x.error)}">${esc(x.name)}</span>`).join('、')}</p>` : ''}
@@ -270,11 +270,17 @@ function drawBoard(b) {
     </tbody></table>
     <details><summary>查看每道题的得分、分项和扣分原因</summary>
     <table><thead><tr><th>模型</th><th>题目</th><th>得分</th><th>分项</th><th>说明</th></tr></thead><tbody>
-    ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${caseStats[x.task]?.saturated ? ' <span class="tag">饱和</span>' : ''}${x.rep ? ` #${x.rep + 1}` : ''}</td>
+    ${b.records.map(x => `<tr><td>${esc(name(x.model_id))}</td><td>${esc(x.task)}${caseStats[x.task]?.generated ? ' <span class="tag" title="参数化新题：数字和内容每批不同">新题</span>' : ''}${caseStats[x.task]?.saturated ? ' <span class="tag">饱和</span>' : ''}${x.rep ? ` #${x.rep + 1}` : ''}</td>
       <td class="${x.error ? 'err' : ''}">${x.skipped ? (x.skip_reason === 'service' ? '故障未计分' : '限流未计分') : x.error ? '失败' : Math.round(x.score)}</td>
       <td class="hint" style="font-size:12px">${esc(parts(x.parts))}</td>
       <td>${x.dimension === 'image' && x.answer ? `<img src="${x.answer}" style="height:60px;border-radius:4px">` : ''} ${esc((x.notes || []).join('；') || '全部达标')}</td></tr>`).join('')}
     </tbody></table></details>
+    ${Object.keys(jd.calibration || {}).length ? `<details><summary>查看裁判校验（每个裁判先比对照题：参考答案 vs 故意改差的版本，判反或分不清的不当裁判）</summary>
+      <table><thead><tr><th>项目</th><th>裁判</th><th>对照题</th><th>结果</th><th>正反一致率</th></tr></thead><tbody>
+      ${Object.entries(jd.calibration).flatMap(([d, cal]) => Object.entries(cal).map(([jid, c]) => `<tr><td>${d === 'text' ? '大纲' : '排版截图'}</td><td>${esc(name(jid))}</td>
+        <td>${c.controls.map(x => ({correct: '判对', wrong: '判反', unsure: '分不清', failed: '调用失败'}[x.outcome])).join('、')}</td>
+        <td class="${c.passed ? 'ok' : 'err'}">${c.passed ? '通过' : '未通过'}</td><td>${c.consistency != null ? Math.round(c.consistency * 100) + '%' : '—'}</td></tr>`)).join('')}
+      </tbody></table></details>` : ''}
     ${outlineJ.length ? `<details><summary>查看大纲对比参考答案评审（${jCounts.text ?? outlineJ.length} 份，每份正反各问一次）</summary>${judgeTable(outlineJ)}</details>` : ''}
     ${layoutJ.length ? `<details><summary>查看排版截图对比参考答案评审（${jCounts.layout ?? layoutJ.length} 份，每份正反各问一次）</summary>${judgeTable(layoutJ)}</details>` : ''}`;
 }

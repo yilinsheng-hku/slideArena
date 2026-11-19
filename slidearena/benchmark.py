@@ -36,26 +36,44 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import cases as C
-from . import config, llm, render, scoring, stats
+from . import config, generate, llm, render, scoring, stats
 
 DIMENSIONS = {"text": "文字 / 大纲", "layout": "排版", "chart": "数据图表", "image": "配图", "speed": "速度"}
 QUALITY_DIMS = ("text", "layout", "chart")
 ALL_CASES = [c for bank in (C.OUTLINE, C.REVISE, C.CONDENSE, C.CHART, C.LAYOUT, C.IMAGE) for c in bank]
+
+
+def case_bank(seed: str | None = "auto") -> dict[str, list[dict]]:
+    """The questions for one run: the hand-checked bank plus a batch of generated cases.
+
+    seed: "auto" (default) = this ISO week's batch, so runs in the same week are comparable;
+    any other string = that batch; None = hand-checked bank only."""
+    out = {"outline": list(C.OUTLINE), "revise": list(C.REVISE), "condense": list(C.CONDENSE),
+           "chart": list(C.CHART), "layout": list(C.LAYOUT), "image": list(C.IMAGE)}
+    if seed is not None:
+        for kind, cases in generate.bank(generate.default_seed() if seed == "auto" else seed).items():
+            out[kind] += cases
+    return out
+
+
+def _all(bank: dict[str, list[dict]]) -> list[dict]:
+    return [c for cases in bank.values() for c in cases]
 
 # kept for deck.py and older callers
 SYS = C.SYS
 OUTLINE_PROMPT = C.OUTLINE_PROMPT
 
 
-def task_list(model: dict) -> list[tuple[str, str, dict]]:
+def task_list(model: dict, bank: dict[str, list[dict]] | None = None) -> list[tuple[str, str, dict]]:
     """(dimension, kind, case) for one model."""
-    jobs = [("text", "outline", c) for c in C.OUTLINE]
-    jobs += [("text", "revise", c) for c in C.REVISE]
-    jobs += [("text", "condense", c) for c in C.CONDENSE]
-    jobs += [("chart", "chart", c) for c in C.CHART]
-    jobs += [("layout", "layout", c) for c in C.LAYOUT]
+    bank = bank or case_bank(None)
+    jobs = [("text", "outline", c) for c in bank["outline"]]
+    jobs += [("text", "revise", c) for c in bank["revise"]]
+    jobs += [("text", "condense", c) for c in bank["condense"]]
+    jobs += [("chart", "chart", c) for c in bank["chart"]]
+    jobs += [("layout", "layout", c) for c in bank["layout"]]
     if model.get("can_image"):
-        jobs += [("image", "image", c) for c in C.IMAGE]
+        jobs += [("image", "image", c) for c in bank["image"]]
     return jobs
 
 
@@ -197,9 +215,83 @@ def _verdict_pair(judge: dict, kind: str, case: dict, ra: dict, rb: dict) -> lis
 
 JUDGE_POINTS = {"win": 100.0, "tie": 50.0, "loss": 0.0}
 
+# --------------------------------------------------------------------------- judge calibration
+# Before a model may judge, it must tell a reference answer from a deliberately worse copy of it
+# (blind, both orders). A judge that prefers the worse copy, or cannot tell them apart at all
+# (e.g. it always picks the first one), is left out of judging for that dimension.
+CONTROLS_PER_JUDGE = 2
+_FAKE_AMOUNTS = ("63.9 亿元", "9.47 亿元", "5.83 亿元", "1,234 万元", "27.6 亿元")
+
+
+def degrade(kind: str, case: dict) -> dict:
+    """A copy of the reference answer that is clearly worse in ways the judge prompt names."""
+    import copy
+
+    from . import facts
+    ans = copy.deepcopy(case["reference"])
+    if kind == "outline":
+        src = facts.Source(case["material"])
+        fakes = [a for a in _FAKE_AMOUNTS if src.unsupported(a)]
+        body = [sl for sl in ans["slides"][1:] if sl.get("bullets")]
+        for i, sl in enumerate(body[:3]):              # invented numbers replace real key facts
+            fake = fakes[i % len(fakes)].replace(" ", "")
+            sl["bullets"][0] = f"新增合同额{fake}，表现超出预期" if i % 2 == 0 else f"利润预计达到{fake}"
+        return ans
+    els = ans["elements"]
+    texts = [e for e in els if case["elements"].get(e["role"]) is not None and e["role"] != "title"]
+    for e in texts:                                     # text needs twice the room it gets: spills in red
+        need = scoring.text_height(case["elements"][e["role"]], e["w"], float(e["font_size"]))
+        e["h"] = round(min(e["h"], need) * 0.5, 2)
+    others = [e for e in els if e["role"] != "title"]
+    if len(others) >= 2:                                # and two blocks overlap
+        others[1]["x"], others[1]["y"] = others[0]["x"] + 0.4, others[0]["y"] + 0.3
+    return ans
+
+
+def control_cases(kind: str) -> list[dict]:
+    if kind == "outline":
+        return [c for c in C.OUTLINE if c.get("check_numbers", True) and c["must_numbers"]]
+    return list(C.LAYOUT)
+
+
+def calibrate(judges: list[dict], kind: str, progress) -> dict[str, dict]:
+    """Run the control comparisons. Returns {judge_id: {"passed": bool, "controls": [...]}}.
+    A judge passes when it never prefers the worse copy and gets at least one control right."""
+    pool = control_cases(kind)
+    jobs = []
+    for j_index, judge in enumerate(judges):
+        for t in range(CONTROLS_PER_JUDGE):
+            jobs.append((judge, pool[(j_index * CONTROLS_PER_JUDGE + t) % len(pool)]))
+
+    def ask(job):
+        judge, case = job
+        votes = _verdict_pair(judge, kind, case, {"parsed": case["reference"]}, {"parsed": degrade(kind, case)})
+        if votes is None:
+            outcome = "failed"
+        elif votes == ["A", "A"]:
+            outcome = "correct"
+        elif votes == ["B", "B"]:
+            outcome = "wrong"
+        else:
+            outcome = "unsure"
+        return judge, {"case": case["id"], "votes": votes, "outcome": outcome}
+
+    out: dict[str, dict] = {j["id"]: {"controls": []} for j in judges}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for judge, ctl in ex.map(ask, jobs):
+            out[judge["id"]]["controls"].append(ctl)
+    label = "大纲" if kind == "outline" else "排版截图"
+    for judge in judges:
+        rec = out[judge["id"]]
+        outcomes = [c["outcome"] for c in rec["controls"]]
+        rec["passed"] = "wrong" not in outcomes and "correct" in outcomes
+        progress(f"{label}裁判校验 {judge['name']}：{'通过' if rec['passed'] else '未通过，本次不当裁判'}"
+                 f"（对照题 {'、'.join({'correct': '判对', 'wrong': '判反', 'unsure': '分不清', 'failed': '调用失败'}[o] for o in outcomes)}）")
+    return out
+
 
 def reference_judging(records: list[dict], models: list[dict], judges: list[dict], progress,
-                      kind: str = "outline") -> dict:
+                      kind: str = "outline", cases: list[dict] | None = None) -> dict:
     """Compare every answer with the case's hand-checked reference answer, blind.
 
     The judge sees the model's answer and the reference as "A" and "B" (it is not told which is
@@ -208,8 +300,7 @@ def reference_judging(records: list[dict], models: list[dict], judges: list[dict
     backups), so it works the same for 2 models or 20 and costs 2 calls per answer.
     Because the yardstick is fixed, the result does not depend on who else is in the run.
     Returns {"results": {model_id: {case_id: points}}, "log": [...], "judged": n}."""
-    bank = C.OUTLINE if kind == "outline" else C.LAYOUT
-    case_map = {c["id"]: c for c in bank}
+    case_map = {c["id"]: c for c in (cases if cases is not None else (C.OUTLINE if kind == "outline" else C.LAYOUT))}
     answers = [r for r in records if r["kind"] == kind and r.get("parsed") and r["rep"] == 0
                and r["task"] in case_map]
     answers.sort(key=lambda r: (r["task"], r["model_id"]))
@@ -338,10 +429,10 @@ def rank_dimension(dims: dict[str, dict]) -> None:
         d["rank"] = "leader" if mid == leader else "behind" if flags[mid] else "tied"
 
 
-def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
+def summarize_cases(records: list[dict], models: list[dict], cases: list[dict] | None = None) -> list[dict]:
     """Summarize per-question spread so saturated questions are visible."""
     by_task: dict[str, dict[str, list[float]]] = {}
-    meta = {c["id"]: c for c in ALL_CASES}
+    meta = {c["id"]: c for c in (cases or ALL_CASES)}
     for rec in records:
         if rec.get("skipped") or rec.get("error"):
             continue
@@ -355,7 +446,7 @@ def summarize_cases(records: list[dict], models: list[dict]) -> list[dict]:
         case = meta.get(task, {})
         out.append({"task": task,
                     "dimension": next((r["dimension"] for r in records if r["task"] == task), ""),
-                    "level": case.get("level", "standard"), "scores": scores,
+                    "level": case.get("level", "standard"), "generated": "generated" in case, "scores": scores,
                     "range": round(max(values) - min(values), 1),
                     "stdev": round(statistics.pstdev(values), 1),
                     "saturated": len(models) >= 2 and len(scores) == len(models)
@@ -370,9 +461,9 @@ JUDGING_TEXT = {
 }
 
 
-def _jobs(models: list[dict], repeats: int, dims: list[str] | None) -> list[tuple]:
+def _jobs(models: list[dict], repeats: int, dims: list[str] | None, bank: dict) -> list[tuple]:
     return [(m, dim, kind, case, rep) for m in models for rep in range(max(1, repeats))
-            for dim, kind, case in task_list(m)
+            for dim, kind, case in task_list(m, bank)
             if not (kind == "image" and rep) and (not dims or dim in dims)]
 
 
@@ -384,12 +475,14 @@ def _judge_pools(judges: list[dict], visual: bool) -> list[tuple[str, str, list[
 
 
 def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int = 1,
-         pairwise: bool = True, dims: list[str] | None = None, visual: bool = True) -> dict:
+         pairwise: bool = True, dims: list[str] | None = None, visual: bool = True,
+         seed: str | None = "auto") -> dict:
     """What a run will do for this many models, before spending any quota."""
     all_models = config.list_models()
     models = [m for m in all_models if m["id"] in model_ids]
     ids = [m["id"] for m in models]
-    jobs = _jobs(models, repeats, dims)
+    bank = case_bank(seed)
+    jobs = _jobs(models, repeats, dims, bank)
     judges = [m for m in all_models if m["id"] in (judge_ids or ids)]
     out = {"models": len(models), "task_calls": len(jobs),
            "calls_per_model": {m["name"]: sum(1 for j in jobs if j[0] is m) for m in models},
@@ -399,20 +492,25 @@ def plan(model_ids: list[str], judge_ids: list[str] | None = None, repeats: int 
             continue
         pool_ids = [j["id"] for j in pool]
         mode = judging_mode(ids, pool_ids)
-        bank = C.OUTLINE if kind == "outline" else C.LAYOUT
-        calls = 2 * len(bank) * sum(1 for mid in ids if any(j != mid for j in pool_ids))
+        calls = 2 * len(bank[kind]) * sum(1 for mid in ids if any(j != mid for j in pool_ids))
+        if mode != "none":
+            calls += 2 * CONTROLS_PER_JUDGE * len(pool_ids)          # calibration controls
         out["judging"][dim] = {"mode": mode, "calls": calls}
         out["judge_calls"] += calls
     n = len(models)
+    n_gen = sum(1 for c in _all(bank) if "generated" in c)
+    out["seed"] = generate.default_seed() if seed == "auto" else seed
     out["lines"].append(f"{n} 个模型，共 {len(jobs)} 次答题调用"
                         + (f"（每个模型约 {len(jobs) // n} 次）" if n else ""))
+    if n_gen:
+        out["lines"].append(f"题目：人工题库 + 本批 {n_gen} 道参数化新题（批次 {out['seed']}，数字和内容每批不同，无法提前背题）")
     if out["judging"] and all(j["mode"] == "none" for j in out["judging"].values()):
         out["lines"].append(JUDGING_TEXT["none"])
     else:
         for dim, j in out["judging"].items():
             name = "大纲" if dim == "text" else "排版截图"
             out["lines"].append(f"{name}：{JUDGING_TEXT[j['mode']]}"
-                                + (f"，约 {j['calls']} 次评审调用（每个模型的开销固定，不随人数增长）" if j["calls"] else ""))
+                                + (f"，约 {j['calls']} 次评审调用（含每个裁判 {CONTROLS_PER_JUDGE} 道对照题校验；每个模型的开销固定，不随人数增长）" if j["calls"] else ""))
     if n:
         out["lines"].append("开测前会先检查连接；连不上的模型自动排除。网络或服务商故障的题不计分，不算模型答错")
     return out
@@ -440,12 +538,13 @@ UNSCORED_WARN = 0.2     # warn (and keep out of routing) when more than this sha
 
 def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print, repeats: int = 1,
         pairwise: bool = True, dims: list[str] | None = None, visual: bool = True,
-        check_connection: bool = True) -> dict:
+        check_connection: bool = True, seed: str | None = "auto") -> dict:
     """Benchmark any number of models (1, 2, ... N) with one call.
 
     dims: only test these dimensions (e.g. ["layout"]); visual: judge layout screenshots;
     pairwise: compare outlines / layouts with the reference answers using another model as judge;
-    check_connection: ping first and leave unreachable models out."""
+    check_connection: ping first and leave unreachable models out;
+    seed: batch of generated questions ("auto" = this week's, None = hand-checked bank only)."""
     all_models = config.list_models()
     models = [m for m in all_models if m["id"] in model_ids]
     if not models:
@@ -457,7 +556,9 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
         if not models:
             raise ValueError("所有选中的模型都连接失败，请检查 Key、接口地址和模型名称")
     ids = [m["id"] for m in models]
-    jobs = _jobs(models, repeats, dims)
+    seed = generate.default_seed() if seed == "auto" else seed
+    bank = case_bank(seed)
+    jobs = _jobs(models, repeats, dims, bank)
     progress(f"共 {len(models)} 个模型 × 约 {len(jobs) // max(1, len(models))} 道题"
              f"{f'（每题 {repeats} 次）' if repeats > 1 else ''}，开始测试…")
     records = []
@@ -477,25 +578,41 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
     modes: dict[str, str] = {}
     reachable = set(ids) | {m["id"] for m in all_models if m["id"] not in model_ids}
     judges = [m for m in all_models if m["id"] in (judge_ids or ids) and m["id"] in reachable]
+    calibration: dict[str, dict] = {}
     if pairwise:
         for dim, kind, pool in _judge_pools(judges, visual):
             if not any(r["kind"] == kind for r in records):
                 continue
+            label = "大纲" if dim == "text" else "排版截图"
+            if judging_mode(ids, [j["id"] for j in pool]) == "none":
+                modes[dim] = "none"
+                progress(f"{label}：{JUDGING_TEXT['none']}")
+                continue
+            progress(f"{label}裁判校验：每个裁判先比 {CONTROLS_PER_JUDGE} 道对照题（参考答案 vs 故意改差的版本）…")
+            calibration[dim] = calibrate(pool, kind, progress)
+            pool = [j for j in pool if calibration[dim][j["id"]]["passed"]]
             modes[dim] = judging_mode(ids, [j["id"] for j in pool])
             if modes[dim] == "none":
-                progress(f"{'大纲' if dim == 'text' else '排版截图'}：{JUDGING_TEXT['none']}")
+                progress(f"{label}：没有裁判通过校验，只按规则评分")
                 continue
-            progress(f"开始{'大纲' if dim == 'text' else '排版截图'}评审：与人工参考答案盲比，正反各问一次…")
-            judged[dim] = reference_judging(records, models, pool, progress, kind=kind)
+            progress(f"开始{label}评审：与人工参考答案盲比，正反各问一次…")
+            judged[dim] = reference_judging(records, models, pool, progress, kind=kind, cases=bank[kind])
+            for jid, rec in calibration[dim].items():     # how often each judge agreed with itself
+                votes = [x["votes"] for x in judged[dim]["log"] if x["judge"] == jid and x["votes"]]
+                if votes:
+                    rec["consistency"] = round(sum(v[0] == v[1] for v in votes) / len(votes), 2)
 
     scores = summarize(records, models, judged)
     for mid, row in scores.items():
         if row["unscored_rate"] > UNSCORED_WARN:
             progress(f"注意：{names[mid]} 有 {row['skipped']} 题因网络/限流没有计分，它的分数只基于剩下的题，可信度较低")
     logs = [x for p in judged.values() for x in p.get("log", [])]
-    case_stats = summarize_cases(records, models)
+    case_stats = summarize_cases(records, models, _all(bank))
+    asked = {r["task"] for r in records}
     result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": 3, "bank_version": C.BANK_VERSION,
-              "question_count": len(case_stats), "hard_count": sum(c.get("level") == "hard" for c in ALL_CASES),
+              "seed": seed, "generated_count": sum(1 for c in _all(bank) if "generated" in c and c["id"] in asked),
+              "question_count": len(case_stats),
+              "hard_count": sum(c.get("level") == "hard" for c in _all(bank) if c["id"] in asked),
               "case_stats": case_stats, "repeats": repeats,
               "duration": round(time.time() - t0, 1),
               "models": [config.public_model(m) for m in models],
@@ -503,7 +620,7 @@ def run(model_ids: list[str], judge_ids: list[str] | None = None, progress=print
               "records": [{k: v for k, v in r.items() if k != "parsed"} for r in records],
               "judging": {"log": logs, "judged": sum(p.get("judged", 0) for p in judged.values()),
                           "by_dim": {d: p.get("judged", 0) for d, p in judged.items()},
-                          "modes": modes, "weight": JUDGE_WEIGHT},
+                          "modes": modes, "weight": JUDGE_WEIGHT, "calibration": calibration},
               "scores": scores}
     history = config.load("benchmarks.json", [])
     history.append(result)
@@ -539,14 +656,12 @@ def ping(model: dict) -> dict:
         return {"ok": False, "error": str(e)[:300]}
 
 
-def selftest() -> list[tuple[str, float]]:
-    """Score every reference answer. All must be 100, otherwise the scorer is wrong."""
-    out = []
-    for kind, bank in (("outline", C.OUTLINE), ("revise", C.REVISE), ("condense", C.CONDENSE),
-                       ("chart", C.CHART), ("layout", C.LAYOUT)):
-        for case in bank:
-            out.append((case["id"], SCORERS[kind](case["reference"], case)[0]))
-    return out
+def selftest(seed: str | None = "auto") -> list[tuple[str, float]]:
+    """Score every reference answer, including this batch's generated ones. All must be 100,
+    otherwise the scorer (or a generator) is wrong."""
+    bank = case_bank(seed)
+    return [(case["id"], SCORERS[kind](case["reference"], case)[0])
+            for kind in ("outline", "revise", "condense", "chart", "layout") for case in bank[kind]]
 
 
 # --------------------------------------------------------------------------- routing

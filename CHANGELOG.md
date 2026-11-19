@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added 10 generated tasks per run (5 charts, 2 condensations, 3 layouts) with random numbers, names, distractors, and layouts, so the public bank cannot simply be memorised. References are computed in code and checked with the real scorer before use. The default batch changes every ISO week; `--seed` reproduces a batch and `--no-fresh` uses the hand-checked bank only.
+- Judges are calibrated before judging: each must tell a reference answer from a deliberately worse copy in 2 blind controls. Judges that prefer the worse copy or cannot tell them apart are left out, and the leaderboard shows each judge's results and self-consistency.
+- The offline demo judges now use simple real judgement (invented numbers, overflowing text) instead of random votes.
 - One-click benchmarking now works for any number of models.
 - Outlines and layouts are now reviewed blind against the hand-checked reference answer by another model, instead of pairwise between models. Scores no longer depend on which other models are in the run, review cost per model is constant, and two models can review each other without self-judging. Matching the reference leaves the rule score unchanged; beating or losing to it moves a judged task by 12.5 points.
 - "Tied" / "behind" now come from one Westfall–Young permutation test over all pairs. The old per-pair test against the leader wrongly reported someone "behind" in about 90% of runs with 10 equally good models; the new test stays near 10%.

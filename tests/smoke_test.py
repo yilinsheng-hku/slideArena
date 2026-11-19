@@ -30,10 +30,10 @@ SEEN = {"openai_auth": None, "anthropic_key": None, "anthropic_version": None}
 
 def _case_for(prompt: str):
     from slidearena import cases as C
-    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT):
+    from slidearena.generate import REGISTRY
+    for bank in (C.REVISE, C.OUTLINE, C.CONDENSE, C.CHART, C.LAYOUT, list(REGISTRY.values())):
         for c in bank:
-            key = c.get("material") or c.get("desc")
-            if key and key in prompt:
+            if C.matches_prompt(c, prompt):
                 return c
     return None
 
@@ -44,7 +44,12 @@ def fake_answer(prompt: str) -> str:
         return "pong"
     # judge prompts quote the case material, so answer them before the case lookup below
     if "[task:pairwise]" in prompt:
-        return '{"winner": "A", "reason": "更具体"}'
+        # an honest outline judge: the outline with fewer invented numbers wins
+        from slidearena import facts
+        m = re.search(r"需求与资料：\s*(.*?)【大纲 A】(.*?)【大纲 B】(.*?)只输出", prompt, re.S)
+        src = facts.Source(m.group(1))
+        a, b = len(src.unsupported(m.group(2))), len(src.unsupported(m.group(3)))
+        return '{"winner": "%s", "reason": "数字更可靠"}' % ("tie" if a == b else "A" if a < b else "B")
     if "[task:visual_pairwise]" in prompt:
         SEEN["visual_judge_images"] = SEEN.get("visual_judge_images", 0) + 1
         return '{"winner": "B", "reason": "留白更均衡"}'
@@ -163,10 +168,11 @@ def main():
                       progress=lambda m: None)
     revise_records = [record for record in r["records"] if record.get("kind") == "revise"]
     revise_tasks = {record.get("task") for record in revise_records}
-    check(r["bank_version"] == "2026.11-c" and r["question_count"] == 31 and
+    check(r["bank_version"] == "2026.11-c" and r["question_count"] == 41 and r["generated_count"] == 10 and
+          r["seed"] and
           revise_tasks == {"revise-review", "revise-pitch"} and
           isinstance(r["case_stats"], list) and all("range" in item and "stdev" in item for item in r["case_stats"]),
-          f"benchmark 结果包含题库版本、两道大纲改错题和逐题区分度（题数 {r['question_count']}，改错题 {sorted(revise_tasks)}）")
+          f"benchmark 结果包含题库版本、出题批次、两道大纲改错题和逐题区分度（题数 {r['question_count']}：31 道人工题 + 10 道生成题，改错题 {sorted(revise_tasks)}）")
     s = r["scores"]
     d_oa = s[oa["id"]]["dims"]
     check(all(d_oa[k]["score"] == 100 for k in ("text", "chart", "layout")),
@@ -177,11 +183,15 @@ def main():
     jd = r["judging"]
     check(all(p["judge"] != p["model"] for p in jd["log"]), "对比参考答案评审里模型不会评自己的答案")
     by = jd.get("by_dim", {})
-    check(by.get("text", 0) > 0 and by.get("layout", 0) > 0, f"大纲评审和排版截图评审都完成了 {by}")
+    cal = jd.get("calibration", {})
+    check(by.get("text", 0) > 0 and cal.get("text") and all(c["passed"] for c in cal["text"].values()),
+          f"诚实的大纲裁判通过对照题校验并完成评审 {by}")
     check(SEEN.get("visual_judge_images", 0) > 0 and SEEN.get("saw_image_parts"), "排版截图以图片形式发给了评审模型")
-    # the fake judge always prefers the second picture, so swapping A/B makes every verdict inconsistent
-    check(all(p["result"] == "tie" for p in jd["log"] if p.get("kind") == "layout"),
-          "评审总选同一位置时，正反两次结论不一致，记为持平")
+    # the fake visual judge always picks the second picture: it cannot tell the reference from a broken
+    # copy, so calibration must keep it out of layout judging
+    check(cal.get("layout") and not any(c["passed"] for c in cal["layout"].values())
+          and not by.get("layout") and jd["modes"].get("layout") == "none",
+          "总选同一位置的视觉裁判没通过对照题校验，不参与排版评审")
     check("sk-ant-secret" not in json.dumps(r, ensure_ascii=False), "测试结果里不包含明文 Key")
     check(benchmark.route("text", [oa, an]) is not None, "路由能在已测模型中选出执行者")
 

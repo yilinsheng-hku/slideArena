@@ -86,6 +86,12 @@ def print_board(r: dict) -> None:
         parts = [f"{'大纲' if d == 'text' else '排版截图'} {n} 份" for d, n in (jd.get("by_dim") or {}).items() if n]
         print(f"对比参考答案评审：{'，'.join(parts)}（另一个模型盲评，正反各问一次；"
               f"与参考答案持平不加不减，胜过/不如各影响该题 {jd.get('weight', 0.25) * 50:.1f} 分）")
+    for d, cal in (jd.get("calibration") or {}).items():
+        failed = [names.get(j, j) for j, c in cal.items() if not c["passed"]]
+        print(f"{'大纲' if d == 'text' else '排版截图'}裁判校验：{len(cal) - len(failed)}/{len(cal)} 通过"
+              + (f"，未通过（不当裁判）：{'、'.join(failed)}" if failed else ""))
+    if r.get("seed"):
+        print(f"题目：人工题库 + 参数化新题 {r.get('generated_count', 0)} 道（批次 {r['seed']}，同一批次的题完全相同）")
     case_stats = r.get("case_stats", [])
     if case_stats:
         print(f"共 {r.get('question_count', len(case_stats))} 道题，其中 {sum(1 for c in case_stats if c.get('saturated'))} 道饱和。")
@@ -97,7 +103,8 @@ def cmd_bench(a):
     if not ids:
         print("还没有模型。运行 slidearena add 或 slidearena demo")
         return 1
-    opts = dict(repeats=a.repeats, pairwise=not a.no_judge, dims=a.only, visual=not a.no_visual)
+    opts = dict(repeats=a.repeats, pairwise=not a.no_judge, dims=a.only, visual=not a.no_visual,
+                seed=None if a.no_fresh else (a.seed or "auto"))
     for line in benchmark.plan(ids, **opts)["lines"]:
         print("· " + line)
     try:
@@ -114,7 +121,7 @@ def cmd_bench(a):
 
 def cmd_selftest(a):
     bad = 0
-    for cid, s in benchmark.selftest():
+    for cid, s in benchmark.selftest(a.seed or "auto"):
         print(f"{'PASS' if s == 100 else 'FAIL'}  {cid}  参考答案得分 {s}")
         bad += s != 100
     print("评分器自检通过" if not bad else f"有 {bad} 道题的参考答案没拿满分，评分器有问题")
@@ -143,7 +150,10 @@ def main(argv=None):
     b.add_argument("--no-visual", action="store_true", help="跳过排版截图的视觉评审")
     b.add_argument("--only", nargs="+", choices=["text", "layout", "chart", "image"],
                    help="只测这些维度，例如 --only layout")
-    sub.add_parser("selftest", help="评分器自检：所有参考答案必须拿满分")
+    b.add_argument("--seed", help="参数化新题的批次（默认本周，例如 2026-W47）；同一批次的题完全相同，便于对比")
+    b.add_argument("--no-fresh", action="store_true", help="只用人工题库，不加参数化新题")
+    st = sub.add_parser("selftest", help="评分器自检：所有参考答案（含本批参数化新题）必须拿满分")
+    st.add_argument("--seed", help="检查哪一批参数化新题（默认本周）")
     mk = sub.add_parser("make", help="按测试结果分工做一份 PPT")
     mk.add_argument("brief")
     mk.add_argument("-n", "--slides", type=int, default=6)

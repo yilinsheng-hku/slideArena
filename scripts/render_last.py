@@ -7,14 +7,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from slidearena import cases as C
-from slidearena import config, llm, render
+from slidearena import benchmark, config, llm, render
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(tempfile.gettempdir()) / "slidearena-render"
 tasks = sys.argv[2:] or None
 os.makedirs(out, exist_ok=True)
 b = config.load("benchmarks.json", [])[-1]
-lc = {c["id"]: c for c in C.LAYOUT}
+lc = {c["id"]: c for c in benchmark.case_bank(b.get("seed"))["layout"]}   # rebuild that run's batch
 for r in b["records"]:
     if r["kind"] == "layout" and r.get("answer") and (not tasks or r["task"] in tasks):
         png = render.render_layout(llm.extract_json(r["answer"]), lc[r["task"]])
